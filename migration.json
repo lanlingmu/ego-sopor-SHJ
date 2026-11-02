@@ -1,0 +1,29 @@
+{
+  "excluded_repository": "waangzhanceshi",
+  "sites": [
+    {
+      "repository": "https://github.com/lanlingmu27-ops/3d_sanddraw",
+      "source_commit": "a04654487db09a8d10aa85598e23361624d81c41",
+      "directory": "3d_sanddraw",
+      "title": "SHJ的小网站们-3D 沙纹"
+    },
+    {
+      "repository": "https://github.com/lanlingmu27-ops/Daily-Luck",
+      "source_commit": "686d4b4dc9f144a2ddba0df492d674b6d9a32b81",
+      "directory": "Daily-Luck",
+      "title": "SHJ的小网站们-每日塔罗"
+    },
+    {
+      "repository": "https://github.com/lanlingmu27-ops/particle-pagoda",
+      "source_commit": "efdc4556dab160bab3c99c4b9e42bbe6a2873f25",
+      "directory": "particle-pagoda",
+      "title": "SHJ的小网站们-粒子古塔"
+    },
+    {
+      "repository": "https://github.com/lanlingmu27-ops/ripples",
+      "source_commit": "14d28046184ef1eec5f3bba214fb9db89ddb3a5c",
+      "directory": "ripples",
+      "title": "SHJ的小网站们-液态涟漪"
+    }
+  ]
+}

@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>SHJ的小网站们-粒子古塔</title>
+  <style>
+    body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; font-family: sans-serif; }
+    #video-bg {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover;
+      /* 暗暗的、有环境感的摄像头画面 */
+      filter: brightness(0.35) contrast(1.1) saturate(0.8); 
+      transform: scaleX(-1);
+      z-index: 0; 
+      opacity: 1.0;
+    }
+    #webgl-canvas {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      z-index: 10; pointer-events: none; 
+      /* 注意：坚决移除了 mix-blend-mode: screen 等一切可能导致过曝叠加的后期层叠 */
+    }
+    #ui-layer {
+      position: absolute; top: 20px; left: 20px;
+      color: #ccaa99; font-size: 0.9rem; letter-spacing: 1px;
+      z-index: 20; transition: opacity 1.5s ease;
+    }
+  </style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="伸出双手，走进一座由粒子与场域构成的古塔。">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/site-nav.css">
+</head>
+<body>
+<a class="shj-home" href="../" aria-label="返回总站：SHJ的小网站们"><span aria-hidden="true">⌂</span><span>SHJ的小网站们-粒子古塔</span></a>
+  <video id="video-bg" autoPlay playsInline></video>
+  <canvas id="webgl-canvas"></canvas>
+  <div id="ui-layer">
+    <p id="ui-status">正在装载场域引擎与古建点云...</p>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://esm.sh/three@0.160.0';
+    import { GPUComputationRenderer } from 'https://esm.sh/three@0.160.0/examples/jsm/misc/GPUComputationRenderer.js';
+    import { HandLandmarker, FilesetResolver } from 'https://esm.sh/@mediapipe/tasks-vision@0.10.3';
+
+    const video = document.getElementById('video-bg');
+    const canvas = document.getElementById('webgl-canvas');
+    const uiLayer = document.getElementById('ui-layer');
+    const uiStatus = document.getElementById('ui-status');
+
+    let engine = null;
+    let landmarker = null;
+    
+    // ==========================================
+    // 1. WebGL & GPGPU Shader Constants
+    // ==========================================
+    // 精准控制在 1048576 粒子，赋予水乡无与伦比的厚重且精细细腻的建筑点云
+    const TEXT_SIZE = 1024; 
+    const PARTICLE_COUNT = TEXT_SIZE * TEXT_SIZE;
+
+    // 基本的位置更新：从Velocity读取速度叠加
+    const positionShader = `
+      uniform float deltaTime;
+      void main() {
+        vec2 uv = gl_FragCoord.xy / resolution.xy;
+        vec4 tmpPos = texture2D(texturePosition, uv);
+        vec3 vel = texture2D(textureVelocity, uv).xyz;
+        vec3 pos = tmpPos.xyz + vel * deltaTime;
+        gl_FragColor = vec4(pos, tmpPos.w); // 保留 w 轴存储的基础特征标志位
+      }
+    `;
+
+    // 核心物理引擎：SDF 遮罩，高度映射，Curl Noise，Spring-Damper
+    const velocityShader = `
+      uniform float deltaTime;
+      uniform float time;
+      uniform sampler2D textureTarget; // 全局静态古建点云坐标
+      
+      uniform vec3 handPos1;
+      uniform float handActive1;
+      uniform vec3 handPos2;
+      uniform float handActive2;
+      
+      // ========================================================
+      // 1. SIMPLEX & CURL NOISE 取样算法 (用于模拟流体飘散效果)
+      // ========================================================
+      vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+      float mod289(float x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+      vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+      float permute(float x) { return mod289(((x*34.0)+1.0)*x); }
+      vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+      
+      float snoise(vec3 v) {
+        const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
+        const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+        vec3 i  = floor(v + dot(v, C.yyy) );
+        vec3 x0 = v - i + dot(i, C.xxx) ;
+        vec3 g = step(x0.yzx, x0.xyz);
+        vec3 l = 1.0 - g;
+        vec3 i1 = min( g.xyz, l.zxy );
+        vec3 i2 = max( g.xyz, l.zxy );
+        vec3 x1 = x0 - i1 + C.xxx;
+        vec3 x2 = x0 - i2 + C.yyy;
+        vec3 x3 = x0 - D.yyy;
+        i = i - floor(i * (1.0 / 289.0)) * 289.0;
+        vec4 p = permute( permute( permute( 
+                  i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
+                + i.y + vec4(0.0, i1.y, i2.y, 1.0 )) 
+                + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
+        float n_ = 0.142857142857;
+        vec3  ns = n_ * D.wyz - D.xzx;
+        vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+        vec4 x_ = floor(j * ns.z);
+        vec4 y_ = floor(j - 7.0 * x_ );
+        vec4 x = x_ *ns.x + ns.yyyy;
+        vec4 y = y_ *ns.x + ns.yyyy;
+        vec4 h = 1.0 - abs(x) - abs(y);
+        vec4 b0 = vec4( x.xy, y.xy );
+        vec4 b1 = vec4( x.zw, y.zw );
+        vec4 s0 = floor(b0)*2.0 + 1.0;
+        vec4 s1 = floor(b1)*2.0 + 1.0;
+        vec4 sh = -step(h, vec4(0.0));
+        vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
+        vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
+        vec3 p0 = vec3(a0.xy,h.x);
+        vec3 p1 = vec3(a0.zw,h.y);
+        vec3 p2 = vec3(a1.xy,h.z);
+        vec3 p3 = vec3(a1.zw,h.w);
+        vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+        p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+        vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+        m = m * m;
+        return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3) ) );
+      }
+      
+      vec3 snoiseVec3(vec3 x){
+        return vec3( snoise(x), snoise(x + vec3(19.1, 33.4, 47.2)), snoise(x + vec3(74.2, 124.5, 99.4)) );
+      }
+
+      vec3 curlNoise(vec3 p) {
+        const float e = 0.1;
+        vec3 dx = vec3(e, 0.0, 0.0), dy = vec3(0.0, e, 0.0), dz = vec3(0.0, 0.0, e);
+        vec3 p_x0 = snoiseVec3(p - dx), p_x1 = snoiseVec3(p + dx);
+        vec3 p_y0 = snoiseVec3(p - dy), p_y1 = snoiseVec3(p + dy);
+        vec3 p_z0 = snoiseVec3(p - dz), p_z1 = snoiseVec3(p + dz);
+        float x = p_y1.z - p_y0.z - p_z1.y + p_z0.y;
+        float y = p_z1.x - p_z0.x - p_x1.z + p_x0.z;
+        float z = p_x1.y - p_x0.y - p_y1.x + p_y0.x;
+        return normalize(vec3(x, y, z));
+      }
+
+      void main() {
+          vec2 uv = gl_FragCoord.xy / resolution.xy;
+          vec3 pos = texture2D(texturePosition, uv).xyz;
+          vec3 vel = texture2D(textureVelocity, uv).xyz;
+          
+          // 获取当前计算的粒子，它【原本在古建中的永久归宿坐标】
+          vec4 targetData = texture2D(textureTarget, uv);
+          vec3 targetPos = targetData.xyz;
+          
+          // ========================================================
+          // 2. SDF Field Mask (遮罩激活逻辑)
+          // ========================================================
+          // 通过判断粒子的 targetPos 与手坐标 在 X-Z 平面的距离，计算激活权重
+          float influence1 = 0.0;
+          float influence2 = 0.0;
+          float maskRadius = 12.0; // 进一步收缩引力场半径，实现局部建筑受控
+          
+          if (handActive1 > 0.5) {
+              float dist1 = distance(targetPos.xz, handPos1.xz);
+              influence1 = 1.0 - smoothstep(maskRadius * 0.2, maskRadius, dist1);
+          }
+          if (handActive2 > 0.5) {
+              float dist2 = distance(targetPos.xz, handPos2.xz);
+              influence2 = 1.0 - smoothstep(maskRadius * 0.2, maskRadius, dist2);
+          }
+          float totalInfluence = clamp(influence1 + influence2, 0.0, 1.0);
+          
+          // ========================================================
+          // 3. Dynamic Y-Axis Mapping (动态高度映射)
+          // ========================================================
+          // 建筑被激活时，恢复为坚固不可波动的古城墙（不再随手部高度波动）
+          float baseGround = -3.5; 
+          float relativeYHeight = targetPos.y - baseGround;
+          
+          float finalMappedHeight = relativeYHeight;
+          if (totalInfluence > 0.05) {
+              float weight1 = influence1 / max(influence1 + influence2, 0.001);
+              float weight2 = influence2 / max(influence1 + influence2, 0.001);
+              
+              // 提取手中心高度：不产生平移，而是让建筑根基不动、整体“拔地而起”长高
+              float lift1 = clamp((handPos1.y + 2.5) / 5.0, 0.0, 1.0); 
+              float lift2 = clamp((handPos2.y + 2.5) / 5.0, 0.0, 1.0);
+              
+              // 将手的高度映射为拉伸比例，并强制封顶为 1.0（建筑完整后不再被拔高）
+              float scale1 = min(mix(0.0, 1.2, lift1), 1.0);
+              float scale2 = min(mix(0.0, 1.2, lift2), 1.0);
+              float handScaleOffset = (scale1 * weight1 + scale2 * weight2); 
+              
+              // 与手掌高度同步绑定拉伸，完整成型后高度不再受影响
+              finalMappedHeight = relativeYHeight * handScaleOffset;
+          }
+          
+          // 这是被遮罩处理后的【绝对刚性终点坐标】，直接改变了伸展的物理高度，而非强行搬动整个屋子
+          vec3 dynamicTarget = vec3(targetPos.x, baseGround + finalMappedHeight, targetPos.z);
+          
+          // 强制安全顶盖，确保绝对不超出屏幕
+          dynamicTarget.y = min(dynamicTarget.y, 4.0);
+          
+          // ========================================================
+          // 4. Rigid Tracking & Collapsing Physics (刚性追踪与塌陷)
+          // ========================================================
+          vec3 force = vec3(0.0);
+          float damping = 0.0;
+          
+          if (totalInfluence > 0.05) {
+              // 活跃状态：采用绝对刚性的固定引力，去除所有由 totalInfluence 造成的渐变波浪！
+              vec3 dir = dynamicTarget - pos;
+              force += dir * 150.0; // 固定引力参数，所有建筑零件同步刚性平移
+              
+              // 极强阻尼，形成无弹性、完全一致的平展运动，毫无果冻效应
+              damping = 0.20;
+          } else {
+              // 塌陷状态：粒子被抛离遮罩，失去结构拉力，迅速塌陷变成流体流沙
+              vec3 cNoise = curlNoise(pos * 0.3 + time * 0.5) * 8.0; 
+              vec3 gravity = vec3(0.0, -12.0, 0.0); // 强坠落感
+              force += gravity + cNoise;
+              
+              // 为了避免粒子永远飞走流失，引入一种极微弱的中心牵引回到它 XZ 附近的地面
+              vec3 groundTarget = vec3(targetPos.x, baseGround - 2.0, targetPos.z);
+              force += (groundTarget - pos) * 0.8; 
+              
+              // 塌陷时阻力极小，让散沙丝滑飞舞
+              damping = 0.98;
+          }
+          
+          // 更新速度模型
+          vel += force * deltaTime;
+          vel *= damping;
+          
+          // 极度严厉的地板碰撞模拟堆积灰尘感
+          if (pos.y < baseGround - 1.0 && totalInfluence < 0.05) {
+              vel.y *= -0.2; // 吸收弹跳
+              vel.xz *= 0.85; // 地面摩擦极大
+          }
+          
+          // 硬速度上限以防爆破穿模
+          float limit = mix(15.0, 45.0, totalInfluence);
+          if (length(vel) > limit) vel = normalize(vel) * limit;
+
+          gl_FragColor = vec4(vel, 1.0);
+      }
+    `;
+
+    // 顶点着色器：解析语义ID(w维度)，分配对应特征颜色和具有透视的大小厚度。
+    const particleVert = `
+      uniform sampler2D texturePosition;
+      uniform sampler2D textureTarget;
+      uniform float pointSize;
+
+      varying vec3 vColor;
+      varying float vAlpha;
+      attribute vec2 uvAnim;
+
+      float rand(vec2 co){ return fract(sin(dot(co, vec2(12.9898,78.233))) * 43758.5453); }
+
+      void main() {
+          vec4 pos = texture2D(texturePosition, uvAnim);
+          vec4 targetData = texture2D(textureTarget, uvAnim);
+          float semanticId = targetData.w; // 解析预存的建筑特征ID
+          
+          vec4 mvPosition = modelViewMatrix * vec4(pos.xyz, 1.0);
+          gl_Position = projectionMatrix * mvPosition;
+          
+          float baseSize = pointSize;
+          float r = rand(uvAnim);
+          
+          // 颜色体系更为明眸亮丽，极具江南古建的丰富多彩与厚重感
+          vec3 colDarkRed = vec3(0.55, 0.15, 0.20);   // 明艳绛红 (重色底座)
+          vec3 colVermilion = vec3(0.95, 0.25, 0.15); // 朱砂红 (主外墙)
+          vec3 colWood = vec3(0.60, 0.35, 0.20);      // 明亮檀木 (粗壮柱体/窗棂)
+          vec3 colCyan = vec3(0.25, 0.65, 0.55);      // 鲜亮青黛 (屋顶瓦当/水面倒影)
+          vec3 colInk = vec3(0.85, 0.90, 0.95);       // 明亮白墙灰瓦 
+          vec3 colGold = vec3(1.00, 0.85, 0.30);      // 闪耀描金 (檐角星芒)
+          
+          float tAlpha = 0.05;
+
+          // 根据特征赋予粒子极具区分度的粗细、色彩和显眼程度，塑造丰富建筑细节
+          if (semanticId > 0.5 && semanticId < 1.5) {
+              // 1.0 Roof 深沉黛瓦屋顶 - 青墨色交织
+              vColor = mix(colCyan, vec3(0.2, 0.35, 0.45), r * 0.8);
+              baseSize *= mix(0.6, 1.2, r); // 瓦片大小起伏，比之前略大
+              tAlpha = 0.25;
+          } else if (semanticId > 1.5 && semanticId < 2.5) {
+              // 2.0 Walls 斑驳白墙 - 细碎沧桑
+              vColor = mix(colInk, vec3(0.6, 0.65, 0.7), r);
+              baseSize *= mix(0.4, 0.8, r); // 墙壁细沙化
+              tAlpha = 0.15;
+          } else if (semanticId > 2.5 && semanticId < 3.5) {
+              // 3.0 Pillars 粗壮的沉木圆柱
+              vColor = mix(colWood, colDarkRed, r);
+              baseSize *= mix(1.2, 2.0, r); // 木柱粗大霸道，强调承重感
+              tAlpha = 0.3;
+          } else if (semanticId > 3.5 && semanticId < 4.5) {
+              // 4.0 Eaves 飞檐翘角，穿插古雅朱红与描金
+              vColor = mix(colVermilion, colGold, r);
+              baseSize *= mix(1.4, 2.4, r); // 夸张的翼角，粒子极大
+              tAlpha = 0.35;
+          } else if (semanticId > 4.5 && semanticId < 5.5) {
+              // 5.0 Windows/Doors 花格窗与木门，透出隐约暖灯
+              vColor = mix(colWood, vec3(0.95, 0.65, 0.25), r);
+              baseSize *= mix(0.6, 1.2, r); // 细腻的棂条感
+              tAlpha = 0.25;
+          } else {
+              // 0.0 Ambient 悬浮的江水底色与游离微尘
+              vColor = mix(vec3(0.1, 0.2, 0.3), colCyan, r);
+              baseSize *= mix(0.2, 0.5, r);
+              tAlpha = 0.08;
+          }
+          
+          // 适度增加体积，避免过度透空
+          gl_PointSize = baseSize * (22.0 / -mvPosition.z);
+          
+          // 过远处的建筑逐渐雾化消隐
+          float distSq = dot(targetData.xz, targetData.xz);
+          float fade = smoothstep(600.0, 200.0, distSq);
+          
+          vAlpha = tAlpha * fade;
+      }
+    `;
+
+    // Fragment：经典圆形模糊点
+    const particleFrag = `
+      varying vec3 vColor;
+      varying float vAlpha;
+
+      void main() {
+          float d = length(gl_PointCoord - vec2(0.5));
+          if (d > 0.5) discard;
+          float a = smoothstep(0.5, 0.1, d) * vAlpha;
+          gl_FragColor = vec4(vColor, a);
+      }
+    `;
+
+    // ==========================================
+    // 2. Application Core (Town Generator & GPGPU)
+    // ==========================================
+    class Engine {
+        constructor(canvas) {
+            this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+            this.renderer.setSize(window.innerWidth, window.innerHeight);
+            this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            
+            this.scene = new THREE.Scene();
+            // 摄像机极大地后退与抬高，提供辽阔的俯瞰水乡宏大视野
+            this.camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
+            this.camera.position.set(0, 8, 28); 
+            this.camera.lookAt(0, -4, 0);
+            
+            this.clock = new THREE.Clock();
+            
+            // Interaction State Variables 
+            this.rawHand1 = new THREE.Vector3(0, -10, 0);
+            this.targetActive1 = 0.0;
+            this.smoothedHand1 = new THREE.Vector3(0, -10, 0);
+            this.smoothedActive1 = 0.0;
+
+            this.rawHand2 = new THREE.Vector3(0, -10, 0);
+            this.targetActive2 = 0.0;
+            this.smoothedHand2 = new THREE.Vector3(0, -10, 0);
+            this.smoothedActive2 = 0.0;
+
+            this.initGPGPU();
+            this.initParticles();
+            
+            window.addEventListener('resize', () => {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        // ==========================================
+        // 算法：生成全局静态古建点阵图数据 (Global Static Point Cloud)
+        // ==========================================
+        generateTownCloud(data) {
+            let offset = 0;
+            const limit = data.length;
+            
+            const addPoints = (count, generator) => {
+                for (let i = 0; i < count && offset < limit; i++) {
+                    const pt = generator();
+                    data[offset++] = pt.x;
+                    data[offset++] = pt.y;
+                    data[offset++] = pt.z;
+                    data[offset++] = pt.w; // Semantic ID 
+                }
+            };
+
+            // 核心复合建筑生成器：能生成歇山顶大殿、江南民居、多层阁楼塔与八角亭
+            const addBuilding = (count, cx, cz, xw, zw, floors, style="house") => {
+                const isPagoda = style === "pagoda";
+                const isPavilion = style === "pavilion";
+                
+                let roofP = 0.35, wallP = 0.25, pillarP = 0.20, detailP = 0.20;
+                if (isPavilion) { roofP = 0.50; wallP = 0.0; pillarP = 0.40; detailP = 0.10; }
+                
+                addPoints(count, () => {
+                    const r = Math.random();
+                    let x = 0, y = 0, z = 0, w = 1.0;
+                    
+                    const currentFloor = Math.floor(Math.random() * floors);
+                    const floorH = 1.6;
+                    const groundY = currentFloor * floorH;
+                    
+                    // 塔形建筑逐层收分递减
+                    let localXw = xw * (isPagoda ? Math.pow(0.85, currentFloor) : 1.0);
+                    let localZw = zw * (isPagoda ? Math.pow(0.85, currentFloor) : 1.0);
+                    if (isPavilion) { localXw = xw; localZw = zw; }
+                    
+                    if (r < roofP) {
+                        // 1.0 Roof 黛瓦屋面倒影区
+                        const px = (Math.random() - 0.5) * localXw * 1.4;
+                        const pz = (Math.random() - 0.5) * localZw * 1.4;
+                        x = px; z = pz;
+                        
+                        // 优美的中式屋脊下凹抛物曲线
+                        const maxNorm = Math.max(Math.abs(px)/(localXw*0.7), Math.abs(pz)/(localZw*0.7));
+                        const curve = Math.pow(maxNorm, 1.8); 
+                        y = groundY + floorH + (1.0 - curve) * 1.2;
+                        
+                        w = 1.0; // Roof Semantic
+                        
+                        // 4.0 Eaves 飞檐翘角，集中在边缘
+                        if (maxNorm > 0.85) {
+                            w = 4.0;
+                            const cornerDist = (Math.abs(px)/(localXw*0.7)) * (Math.abs(pz)/(localZw*0.7));
+                            y += cornerDist * 0.9; // 夸张的翼角起翘
+                        }
+                    } 
+                    else if (r < roofP + wallP) {
+                        // 2.0 Walls 白墙
+                        y = groundY + Math.random() * floorH;
+                        if (Math.random() > 0.5) { x = (Math.random()-0.5)*localXw; z = (Math.random()>0.5?1:-1)*localZw*0.5; }
+                        else { z = (Math.random()-0.5)*localZw; x = (Math.random()>0.5?1:-1)*localXw*0.5; }
+                        w = 2.0;
+                    } 
+                    else if (r < roofP + wallP + pillarP) {
+                        // 3.0 Pillars 承重实木圆柱 (四角分布)
+                        y = groundY + Math.random() * floorH;
+                        x = (Math.random()>0.5?1:-1)*localXw*0.48;
+                        z = (Math.random()>0.5?1:-1)*localZw*0.48;
+                        x += (Math.random() - 0.5) * 0.15; // 轻微粗细
+                        z += (Math.random() - 0.5) * 0.15;
+                        w = 3.0; // Pillar Semantic
+                    } 
+                    else {
+                        // 5.0 Windows / Doors 窗棂、雕花门框
+                        w = 5.0; 
+                        y = groundY + Math.random() * (floorH * 0.6) + 0.2; // 留出勒脚墙裙高度
+                        if (Math.random() > 0.5) {
+                            x = (Math.random()-0.5)*localXw*0.6;
+                            z = (Math.random()>0.5?1:-1)*localZw*0.52;
+                            x = Math.floor(x * 6.0) / 6.0; // 形成强烈的网格窗花纹理
+                        } else {
+                            z = (Math.random()-0.5)*localZw*0.6;
+                            x = (Math.random()>0.5?1:-1)*localXw*0.52;
+                            z = Math.floor(z * 6.0) / 6.0;
+                        }
+                        y = Math.floor(y * 8.0) / 8.0; // 横向窗格条纹
+                    }
+                    return { x: cx+x, y: y-3.5, z: cz+z, w: w };
+                });
+            };
+
+            // 浩大的水乡连片城镇点阵拓扑布局
+            const total = PARTICLE_COUNT;
+            
+            // 中央核心太极广场与主体巨塔
+            addBuilding(Math.floor(total * 0.08), 0, 0, 4.5, 4.5, 5, "pagoda");
+            
+            // 八大主轴侧殿 / 周围标志性楼阁
+            addBuilding(Math.floor(total * 0.03), -5.5, -3.5, 3.2, 2.5, 3, "pagoda");
+            addBuilding(Math.floor(total * 0.03), 5.5, -3.5, 3.2, 2.5, 3, "pagoda");
+            addBuilding(Math.floor(total * 0.03), -4.0, 4.0, 2.8, 3.5, 2, "house");
+            addBuilding(Math.floor(total * 0.03), 4.0, 4.0, 2.8, 3.5, 2, "house");
+            addBuilding(Math.floor(total * 0.03), -7.0, 1.0, 3.0, 2.0, 3, "pagoda");
+            addBuilding(Math.floor(total * 0.03), 7.0, 1.0, 3.0, 2.0, 3, "pagoda");
+            addBuilding(Math.floor(total * 0.03), 0.0, -6.0, 4.0, 2.5, 2, "house");
+            addBuilding(Math.floor(total * 0.03), 0.0, 5.5, 4.0, 2.5, 2, "house");
+            
+            // 前景错落建筑群（近处特写，增加画面纵深感）
+            addBuilding(Math.floor(total * 0.025), -6.0, 9.0, 3.5, 2.5, 2, "house");
+            addBuilding(Math.floor(total * 0.025), 5.0, 10.0, 3.0, 3.0, 2, "house");
+            addBuilding(Math.floor(total * 0.02), -2.0, 12.0, 2.5, 2.0, 1, "pavilion");
+            addBuilding(Math.floor(total * 0.02), 3.0, 13.0, 2.5, 2.0, 1, "pavilion");
+            addBuilding(Math.floor(total * 0.03), -9.0, 11.0, 3.0, 3.0, 3, "pagoda");
+            addBuilding(Math.floor(total * 0.03), 8.0, 9.5, 3.5, 3.5, 3, "pagoda");
+
+            // 漫天散布的密集中式连片民居、临水亭楼与层叠飞檐 
+            // （总共循环 320 次，覆盖极其旷阔的城镇）
+            let pointsPerSmallBuild = Math.floor(total * 0.0016); // 降低单体粒子数以给前景留出预算
+            for(let i=0; i<320; i++) {
+                const cx = (Math.random() - 0.5) * 44.0;
+                const cz = (Math.random() - 0.5) * 32.0;
+                
+                // 避开中央区域，防过度粘连
+                if (Math.abs(cx) < 5.0 && Math.abs(cz) < 5.0) continue;
+                
+                const randT = Math.random();
+                const isPavilion = randT < 0.15;
+                const isTall = randT > 0.65; // 增加多层错落阁楼
+                
+                const floors = isTall ? (Math.floor(Math.random()*3)+2) : (isPavilion ? 1 : Math.floor(Math.random()*2)+1);
+                
+                // 紧凑狭长的江南房屋，呈现鳞次栉比的街巷感
+                const isHorizontal = Math.random() > 0.5;
+                const xw = isHorizontal ? (1.5 + Math.random()*2.0) : (0.8 + Math.random()*1.0);
+                const zw = isHorizontal ? (0.8 + Math.random()*1.0) : (1.5 + Math.random()*2.0);
+                
+                addBuilding(pointsPerSmallBuild, cx, cz, xw, zw, floors, isPavilion ? "pavilion" : (isTall ? "pagoda" : "house"));
+            }
+            
+            // 将剩余最后一点粒子化作深水与大地的氛围微尘区
+            const ambient = total - offset;
+            addPoints(ambient, () => {
+                const a = Math.random() * Math.PI * 2;
+                const r = Math.random() * 30.0; // 非常远阔的结界
+                return {
+                    x: Math.cos(a) * r,
+                    y: -3.8 + (Math.random()-0.5)*0.3,
+                    z: Math.sin(a) * r,
+                    w: 0.0 // Ambient ID
+                };
+            });
+        }
+
+        initGPGPU() {
+            this.gpuCompute = new GPUComputationRenderer(TEXT_SIZE, TEXT_SIZE, this.renderer);
+            
+            const dtPosition = this.gpuCompute.createTexture();
+            const dtVelocity = this.gpuCompute.createTexture();
+            this.targetTexture = this.gpuCompute.createTexture();
+            
+            // 生成完美中式建筑静态定位基图
+            this.generateTownCloud(this.targetTexture.image.data);
+            
+            // 初始时让所有粒子散落在很低的随处可见的位置。体现"从沙化到重建"
+            for(let i = 0; i < dtPosition.image.data.length; i+=4) {
+                // 读取 Target 作为基准参考四周散开
+                const tx = this.targetTexture.image.data[i];
+                const tz = this.targetTexture.image.data[i+2];
+                dtPosition.image.data[i]   = tx + (Math.random()-0.5)*5.0;
+                dtPosition.image.data[i+1] = -5.0 + (Math.random() * 2.0);
+                dtPosition.image.data[i+2] = tz + (Math.random()-0.5)*5.0;
+                dtPosition.image.data[i+3] = 1.0;
+                
+                dtVelocity.image.data[i] = (Math.random()-0.5)*2.0;
+                dtVelocity.image.data[i+1] = 0;
+                dtVelocity.image.data[i+2] = (Math.random()-0.5)*2.0;
+                dtVelocity.image.data[i+3] = 1.0;
+            }
+
+            this.posVar = this.gpuCompute.addVariable('texturePosition', positionShader, dtPosition);
+            this.velVar = this.gpuCompute.addVariable('textureVelocity', velocityShader, dtVelocity);
+
+            this.gpuCompute.setVariableDependencies(this.posVar, [this.posVar, this.velVar]);
+            this.gpuCompute.setVariableDependencies(this.velVar, [this.posVar, this.velVar]);
+
+            this.velVar.material.uniforms['deltaTime'] = { value: 0.0 };
+            this.velVar.material.uniforms['time'] = { value: 0.0 };
+            this.velVar.material.uniforms['textureTarget'] = { value: this.targetTexture };
+            
+            this.velVar.material.uniforms['handPos1'] = { value: this.smoothedHand1 };
+            this.velVar.material.uniforms['handActive1'] = { value: 0.0 };
+            this.velVar.material.uniforms['handPos2'] = { value: this.smoothedHand2 };
+            this.velVar.material.uniforms['handActive2'] = { value: 0.0 };
+
+            this.posVar.material.uniforms['deltaTime'] = { value: 0.0 };
+
+            this.gpuCompute.init();
+        }
+
+        initParticles() {
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(PARTICLE_COUNT * 3);
+            const uvs = new Float32Array(PARTICLE_COUNT * 2);
+
+            for(let i=0; i<PARTICLE_COUNT; i++) {
+                const row = Math.floor(i / TEXT_SIZE);
+                const col = i % TEXT_SIZE;
+                uvs[i * 2] = (col + 0.5) / TEXT_SIZE;
+                uvs[i * 2 + 1] = (row + 0.5) / TEXT_SIZE;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('uvAnim', new THREE.BufferAttribute(uvs, 2));
+
+            this.particleUniforms = {
+                texturePosition: { value: null },
+                textureTarget: { value: this.targetTexture },
+                // 基础尺寸控制，将配合 Vertex Shader 产生丰富大小组合
+                pointSize: { value: window.devicePixelRatio * 1.3 } // 适度放大基础粒子，使颜色更加亮眼
+            };
+
+            const material = new THREE.ShaderMaterial({
+                uniforms: this.particleUniforms,
+                vertexShader: particleVert,
+                fragmentShader: particleFrag,
+                blending: THREE.NormalBlending, // 关键：禁用 AdditiveBlending 防止白热叠加燃烧，强制普通透明处理重叠产生边缘辉泽。
+                depthWrite: false,      
+                transparent: true,
+            });
+
+            const particles = new THREE.Points(geometry, material);
+            this.scene.add(particles);
+        }
+
+        // ==========================================
+        // 核心更新循环：接受手部信息映射物理世界
+        // ==========================================
+        updateInteraction(hands) {
+            if (hands.length > 0) {
+                this.targetActive1 = 1.0;
+                this.rawHand1.copy(hands[0]);
+            } else {
+                this.targetActive1 = 0.0;
+            }
+
+            if (hands.length > 1) {
+                this.targetActive2 = 1.0;
+                this.rawHand2.copy(hands[1]);
+            } else {
+                this.targetActive2 = 0.0;
+            }
+        }
+
+        render() {
+            let dt = this.clock.getDelta();
+            if (dt > 0.1) dt = 0.1;
+            const time = this.clock.getElapsedTime();
+
+            // Lerp 缓动双手位置和状态，防止摄像头帧率差造成的空间跳跃导致粒子物理抖动
+            this.smoothedActive1 += (this.targetActive1 - this.smoothedActive1) * (dt * 5.0);
+            this.smoothedActive2 += (this.targetActive2 - this.smoothedActive2) * (dt * 5.0);
+            this.smoothedHand1.lerp(this.rawHand1, dt * 8.0);
+            this.smoothedHand2.lerp(this.rawHand2, dt * 8.0);
+
+            this.velVar.material.uniforms['deltaTime'].value = dt;
+            this.velVar.material.uniforms['time'].value = time;
+            this.velVar.material.uniforms['handActive1'].value = this.smoothedActive1;
+            this.velVar.material.uniforms['handActive2'].value = this.smoothedActive2;
+            
+            this.posVar.material.uniforms['deltaTime'].value = dt;
+
+            this.gpuCompute.compute();
+            this.particleUniforms['texturePosition'].value = this.gpuCompute.getCurrentRenderTarget(this.posVar).texture;
+            
+            this.renderer.render(this.scene, this.camera);
+        }
+    }
+
+    // ==========================================
+    // 3. MediaPipe 神经网络手部感知入口
+    // ==========================================
+    async function init() {
+        try {
+            uiStatus.innerText = "正在装载张量网络 (MediaPipe Vision)...";
+            const vision = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+            );
+            
+            landmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numHands: 2
+            });
+            
+            uiStatus.innerText = "请授权摄像头并稍候...";
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: "user" } });
+            video.srcObject = stream;
+            
+            video.addEventListener("loadeddata", () => {
+                uiStatus.innerText = "准备就绪：展开手掌唤醒废墟...";
+                setTimeout(() => { uiLayer.style.opacity = 0; setTimeout(() => uiLayer.style.display = 'none', 1500); }, 3500);
+                
+                engine = new Engine(canvas);
+                
+                const mapHandToWorld = (landmarks) => {
+                    // 使用掌心 MCP 点作为代表点
+                    const palm = landmarks[9];
+                    
+                    // 将视频的 XY (0 到 1) 映射展平到虚拟城池的广阔边界 (-18 到 +18) 以适应浩瀚的新镇区
+                    const x = ((1.0 - palm.x) * 2 - 1) * 18.0;  
+                    const y = (-(palm.y) * 2 + 1) * 8.0;       
+                    const z = palm.z * -40.0 + 2.0;            
+                    
+                    return new THREE.Vector3(x, y, z);
+                };
+
+                let lastVideoTime = -1;
+                const onFrame = () => {
+                    if (video.currentTime !== lastVideoTime && video.videoWidth > 0 && video.videoHeight > 0) {
+                        lastVideoTime = video.currentTime;
+                        const results = landmarker.detectForVideo(video, performance.now());
+                        
+                        let mappedHands = [];
+                        if (results.landmarks && results.landmarks.length > 0) {
+                            for(let i=0; i<Math.min(2, results.landmarks.length); i++) {
+                                // 可以选加张开判定逻辑，这里默认检测到手就提供遮罩位置激活
+                                mappedHands.push(mapHandToWorld(results.landmarks[i]));
+                            }
+                        }
+                        
+                        engine.updateInteraction(mappedHands);
+                    }
+                    
+                    engine.render();
+                    requestAnimationFrame(onFrame);
+                };
+                onFrame();
+            });
+        } catch (e) {
+            console.error(e);
+            uiStatus.innerText = "链接传感器受阻：请检查摄像头权限。" + e.message;
+        }
+    }
+    
+    init();
+
+  </script>
+</body>
+</html>

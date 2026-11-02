@@ -1,0 +1,1332 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SHJ的小网站们-每日塔罗</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #050508; 
+            font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+            user-select: none;
+            color: #e0d8cc;
+        }
+        #canvas-container { 
+            width: 100vw; 
+            height: 100vh; 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            z-index: 10;
+        }
+        #ui-layer { 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            z-index: 20; 
+            pointer-events: none; 
+        }
+        #loading {
+            /* Now styled with Tailwind, but keeping for reference if accessed natively */
+        }
+        #message { 
+            /* Now styled with Tailwind */
+        }
+        .visible { opacity: 1 !important; }
+        .input_video { 
+            position: absolute; 
+            width: 160px; 
+            bottom: 20px; 
+            right: 20px; 
+            z-index: 30; 
+            opacity: 0.15; 
+            border-radius: 8px; 
+            transform: scaleX(-1); 
+            border: 1px solid rgba(196, 161, 99, 0.3); 
+            box-shadow: 0 0 15px rgba(196, 161, 99, 0.1);
+            transition: opacity 0.3s ease;
+        }
+        .output_canvas {
+            position: absolute; 
+            width: 160px; 
+            bottom: 20px; 
+            right: 20px; 
+            z-index: 30; 
+            opacity: 0.25; 
+            border-radius: 8px; 
+            transform: scaleX(-1); 
+            border: 1px solid rgba(196, 161, 99, 0.3); 
+            box-shadow: 0 0 15px rgba(196, 161, 99, 0.1);
+            transition: opacity 0.3s ease;
+        }
+        .output_canvas:hover {
+            opacity: 0.8;
+        }
+        #cursor { 
+            position: absolute; 
+            width: 8px; 
+            height: 8px; 
+            background: rgba(255,255,255,0.9); 
+            border-radius: 50%; 
+            box-shadow: 0 0 15px #fff, 0 0 25px rgba(255,255,255,0.6); 
+            pointer-events: none; 
+            z-index: 9999; 
+            display: none; 
+            transform: translate(-50%, -50%); 
+        }
+    </style>
+    <!-- Three.js & Postprocessing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+    <!-- GSAP for animations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <!-- MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<meta name="description" content="在流动的光点与卡牌之间，留一点时间给今天的自己。">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/site-nav.css">
+</head>
+<body>
+<a class="shj-home" href="../" aria-label="返回总站：SHJ的小网站们"><span aria-hidden="true">⌂</span><span>SHJ的小网站们-每日塔罗</span></a>
+    <!-- Atmospheric Lighting & Background (Behind Canvas) -->
+    <div class="absolute inset-0 pointer-events-none z-0">
+        <div class="absolute top-0 left-0 w-full h-full opacity-40 bg-[radial-gradient(circle_at_50%_50%,#1a1a2e_0%,transparent_70%)]"></div>
+        <div class="absolute bottom-0 w-full h-[300px] opacity-20 bg-[linear-gradient(to_top,#c4a163_0%,transparent_100%)]"></div>
+    </div>
+
+    <div id="canvas-container"></div>
+    
+    <div id="ui-layer" class="font-serif">
+        <!-- Foreground Vignette -->
+        <div class="absolute inset-0 pointer-events-none shadow-[inset_0_0_150px_rgba(0,0,0,1)]"></div>
+
+        <!-- Hand Tracking Overlay UI -->
+        <div class="absolute top-10 left-10 z-50 flex items-center gap-3">
+            <div class="w-3 h-3 rounded-full bg-white animate-pulse shadow-[0_0_10px_rgba(255,255,255,0.8)]"></div>
+            <div class="font-mono text-[10px] tracking-widest uppercase opacity-60 text-white">System Ready: Tracking active</div>
+        </div>
+
+        <!-- Top Navigation/Ritual Title -->
+        <div class="absolute top-12 left-0 right-0 text-center z-20 pointer-events-none">
+            <h1 class="text-4xl font-light tracking-[0.3em] uppercase opacity-90 text-[#e0d8cc]">Echoes of the Valley</h1>
+            <div class="w-32 h-[1px] bg-[#c4a163] mx-auto mt-4 opacity-30"></div>
+        </div>
+
+        <!-- Center Messages -->
+        <div class="absolute inset-0 flex flex-col items-center justify-center z-20 pointer-events-none mb-12">
+            <div id="loading" class="text-lg tracking-[0.1em] text-white opacity-60 italic mb-5">Connecting to Void...</div>
+            <div id="message" class="text-3xl tracking-[0.4em] text-white opacity-0 transition-opacity duration-1000 ease-in-out font-light" style="text-shadow: 0 0 20px rgba(255,255,255,0.6);">请 洗 牌</div>
+        </div>
+
+        <!-- Interaction HUD Interface -->
+        <div class="absolute bottom-16 left-0 right-0 flex flex-col items-center z-20 pointer-events-none">
+            <div class="flex items-center gap-12 text-[#e0d8cc]">
+                <div class="flex flex-col items-center opacity-40">
+                    <div class="text-[10px] uppercase tracking-widest mb-2">Pointer</div>
+                    <div class="w-10 h-10 border border-white/20 rounded-full flex items-center justify-center">
+                        <div class="w-1 h-1 bg-white rounded-full"></div>
+                    </div>
+                </div>
+                <div id="bottom-hud-text" class="px-10 py-4 flex flex-col items-center border-l border-r border-[#c4a163]/20">
+                    <p class="text-lg tracking-[0.15em] font-light animate-pulse uppercase max-w-[280px] text-center">WAVE HAND TO SUMMON</p>
+                    <p class="text-[9px] text-center uppercase tracking-[0.3em] opacity-40 mt-2">Calibration Level: <span id="calib-lvl">98.4%</span></p>
+                </div>
+                <div class="flex flex-col items-center opacity-40">
+                    <div class="text-[10px] uppercase tracking-widest mb-2">Pinch</div>
+                    <div class="w-10 h-10 border border-white/20 rounded-full flex items-center justify-center">
+                        <div class="w-2 h-2 border border-white/40 rounded-full"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Decorative Line -->
+        <div class="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4 z-20 pointer-events-none">
+            <div class="w-32 h-[1px] bg-gradient-to-r from-transparent to-[#c4a163]/30"></div>
+            <div class="w-2 h-2 rotate-45 border border-[#c4a163]/50"></div>
+            <div class="w-32 h-[1px] bg-gradient-to-l from-transparent to-[#c4a163]/30"></div>
+        </div>
+    </div>
+    <video class="input_video" autoplay playsinline style="display: none;"></video>
+    <canvas class="output_canvas" width="640" height="480"></canvas>
+    <div id="cursor"></div>
+
+    <script>
+        // --- 核心变量 ---
+        let scene, camera, renderer, composer, bloomPass, raycaster;
+        let cardsGroup = new THREE.Group();
+        let cards = [];
+        let particles = [];
+        
+        let state = 'INIT'; // 状态机: INIT, IDLE, POINTING, DRAWN, DISSIPATING
+        let hoveredCard = null;
+        let drawnCard = null;
+        
+        let targetScrollX = 0;
+        let currentScrollX = 0;
+        let scrollVelocity = 0;
+        let prevHandX = 0.5;
+        let prevHandY = 0.5;
+
+        // --- 卡牌配置 ---
+        const CARD_COUNT = 22;
+        const CARD_WIDTH = 2;
+        const CARD_HEIGHT = 3.5;
+        const CARD_DEPTH = 0.05;
+        const SPACING = 2.4;
+        const MAJOR_ARCANA = [
+            '0 The Fool', 'I The Magician', 'II The High Priestess', 'III The Empress', 
+            'IV The Emperor', 'V The Hierophant', 'VI The Lovers', 'VII The Chariot', 
+            'VIII Strength', 'IX The Hermit', 'X Wheel of Fortune', 'XI Justice', 
+            'XII The Hanged Man', 'XIII Death', 'XIV Temperance', 'XV The Devil', 
+            'XVI The Tower', 'XVII The Star', 'XVIII The Moon', 'XIX The Sun', 
+            'XX Judgement', 'XXI The World'
+        ];
+
+        // --- 初始化 Three.js ---
+        function initThree() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x0a0a0c, 0.015);
+
+            camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 1, 100);
+            camera.position.set(0, 2, 16);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setClearColor(0x000000, 0); // Transparent to show CSS backgrounds
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            raycaster = new THREE.Raycaster();
+
+            // 灯光布置，氛围感
+            const ambient = new THREE.AmbientLight(0xffffff, 0.4); // 极弱全局光
+            scene.add(ambient);
+
+            const dirLight = new THREE.DirectionalLight(0xffedd6, 1.2); // 暖色主光
+            dirLight.position.set(0, 10, 8); // Centered
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            scene.add(dirLight);
+
+            const fillLight = new THREE.PointLight(0xc4a163, 1, 20); // Center soft golden glow
+            fillLight.position.set(0, 0, 5); 
+            scene.add(fillLight);
+
+            // Bloom 后期泛光处理
+            const renderScene = new THREE.RenderPass(scene, camera);
+            bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.2, 0.6, 0.2);
+            composer = new THREE.EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            createCards();
+            window.addEventListener('resize', onWindowResize, false);
+            requestAnimationFrame(animate);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- 生成质感卡牌贴图 ---
+        function drawArcanaArt(ctx, index) {
+            ctx.save();
+            ctx.translate(256, 380);
+
+            const primary = '#e0b876';
+            const secondary = '#cda153';
+            const accent = '#ffffff';
+
+            // Intricate Art Nouveau Border Box
+            ctx.strokeStyle = primary;
+            ctx.lineWidth = 4;
+            ctx.strokeRect(-216, -316, 432, 852);
+            ctx.lineWidth = 1;
+            ctx.strokeRect(-208, -308, 416, 836);
+            ctx.strokeRect(-204, -304, 408, 828);
+
+            // Decorate text separator
+            ctx.beginPath();
+            ctx.moveTo(-204, 300);
+            ctx.lineTo(204, 300);
+            ctx.moveTo(-204, 310);
+            ctx.lineTo(204, 310);
+            ctx.stroke();
+
+            // Ornate corners for the top frame of the image
+            for (let dx of [-1, 1]) {
+                for (let yy of [-310, 526]) { // top and bottom bounds
+                    ctx.save();
+                    ctx.translate(dx * 210, yy);
+                    ctx.scale(dx, yy === -310 ? -1 : 1);
+
+                    // Multi-layered corner rings
+                    ctx.beginPath();
+                    ctx.arc(-22, -22, 38, 0, Math.PI * 2);
+                    ctx.strokeStyle = secondary;
+                    ctx.stroke();
+
+                    ctx.beginPath();
+                    ctx.arc(-22, -22, 28, 0, Math.PI * 2);
+                    ctx.strokeStyle = primary;
+                    ctx.stroke();
+
+                    ctx.beginPath();
+                    ctx.arc(-22, -22, 14, 0, Math.PI * 2);
+                    ctx.fillStyle = accent;
+                    ctx.fill();
+                    ctx.stroke();
+
+                    // Corner leaf swoosh
+                    ctx.beginPath();
+                    ctx.moveTo(16, -60);
+                    ctx.quadraticCurveTo(-22, -22, -60, 16);
+                    ctx.quadraticCurveTo(-30, -30, 16, -60);
+                    ctx.strokeStyle = primary;
+                    ctx.stroke();
+
+                    ctx.restore();
+                }
+            }
+
+            // Central Emblems (Top of image box, Bottom of image box, and Bottom of Text Box)
+            for (let yy of [-300, 290, 520]) {
+                ctx.save();
+                ctx.translate(0, yy);
+
+                ctx.beginPath();
+                ctx.arc(0, 0, 35, 0, Math.PI * 2);
+                ctx.strokeStyle = primary;
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.arc(0, 0, 28, 0, Math.PI * 2);
+                ctx.strokeStyle = secondary;
+                ctx.stroke();
+
+                ctx.strokeStyle = primary;
+                if (yy === -300) { // Top Emblem (Star)
+                    ctx.beginPath();
+                    for (let i = 0; i < 8; i++) {
+                        ctx.moveTo(0, 0);
+                        ctx.lineTo(Math.cos(i * Math.PI / 4) * 20, Math.sin(i * Math.PI / 4) * 20);
+                    }
+                    ctx.stroke();
+                    ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2); ctx.fillStyle = accent; ctx.fill(); ctx.stroke();
+                } else { // Crescent
+                    ctx.beginPath();
+                    ctx.arc(0, 8, 16, Math.PI + Math.PI / 6, -Math.PI / 6);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+
+            // Set main lines to primary color for the inner artwork
+            ctx.strokeStyle = primary;
+            ctx.fillStyle = primary;
+
+            // Arch Frame
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(-160, 220);
+            ctx.lineTo(-160, -120);
+            ctx.arc(0, -120, 160, Math.PI, 0);
+            ctx.lineTo(160, 220);
+            ctx.closePath();
+            ctx.stroke();
+
+            ctx.lineWidth = 0.5;
+            for(let i=0; i<5; i++) {
+                ctx.beginPath();
+                ctx.moveTo(-170 - i*5, 230 + i*5);
+                ctx.lineTo(-170 - i*5, -120);
+                ctx.arc(0, -120, 170 + i*5, Math.PI, 0);
+                ctx.lineTo(170 + i*5, 230 + i*5);
+                ctx.closePath();
+                ctx.stroke();
+            }
+
+            // Draw Title Text Before Clipping
+            ctx.save();
+            ctx.translate(0, 360);
+            ctx.textAlign = 'center';
+            ctx.font = '30px "Times New Roman", serif';
+            ctx.fillStyle = primary;
+            ctx.fillText('MAJOR ARCANA', 0, 0);
+            
+            ctx.font = 'italic 52px "Times New Roman", serif';
+            ctx.fillStyle = accent;
+            ctx.fillText(MAJOR_ARCANA[index % MAJOR_ARCANA.length], 0, 80);
+            ctx.restore();
+
+            // Clip inner arch
+            ctx.beginPath();
+            ctx.moveTo(-160, 220);
+            ctx.lineTo(-160, -120);
+            ctx.arc(0, -120, 160, Math.PI, 0);
+            ctx.lineTo(160, 220);
+            ctx.closePath();
+            ctx.clip();
+            
+            // Helper functions
+            const drawPoly = (r, sides, rot=0, cx=0, cy=0) => {
+                ctx.beginPath();
+                for(let i=0; i<=sides; i++) {
+                    const ang = rot + i * (Math.PI*2/sides);
+                    if(i===0) ctx.moveTo(cx+Math.cos(ang)*r, cy+Math.sin(ang)*r);
+                    else ctx.lineTo(cx+Math.cos(ang)*r, cy+Math.sin(ang)*r);
+                }
+                ctx.stroke();
+            };
+            const drawStar = (r, points, rot=0, step=2, cx=0, cy=0) => {
+                ctx.beginPath();
+                for(let i=0; i<=points; i++) {
+                    const ang = rot + (i * step) * (Math.PI*2/points);
+                    if(i===0) ctx.moveTo(cx+Math.cos(ang)*r, cy+Math.sin(ang)*r);
+                    else ctx.lineTo(cx+Math.cos(ang)*r, cy+Math.sin(ang)*r);
+                }
+                ctx.stroke();
+            };
+            const drawInfinity = (scale, cx=0, cy=0) => {
+                ctx.beginPath();
+                for(let t=0; t<Math.PI*2; t+=0.05) {
+                    const r = scale * Math.sqrt(Math.abs(Math.cos(2*t)));
+                    const x = cx + r * Math.cos(t);
+                    const y = cy + r * Math.sin(t);
+                    if(t===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+                }
+                ctx.stroke();
+            };
+            const drawRays = (cx, cy, r0, r1, num, rot=0) => {
+                ctx.beginPath();
+                for(let i=0; i<num; i++) {
+                    const a = rot + i * (Math.PI*2/num);
+                    ctx.moveTo(cx+Math.cos(a)*r0, cy+Math.sin(a)*r0);
+                    ctx.lineTo(cx+Math.cos(a)*r1, cy+Math.sin(a)*r1);
+                }
+                ctx.stroke();
+            };
+            const drawWaves = (ys, amp, freq, steps) => {
+                ctx.beginPath();
+                for(let i=0; i<=steps; i++) {
+                    const x = -160 + (320 * (i/steps));
+                    const y = ys + Math.sin(x * freq) * amp;
+                    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+                }
+                ctx.stroke();
+            };
+            
+            ctx.lineWidth = 1.0;
+            switch (index % 22) {
+                case 0: // 0. The Fool
+                    drawRays(-50, -80, 20, 200, 36);
+                    ctx.beginPath(); ctx.arc(-50, -80, 40, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(160, 220); ctx.lineTo(40, 220); ctx.lineTo(-20, 100); ctx.lineTo(160, -20); ctx.stroke();
+                    for(let i=0; i<30; i++) { ctx.beginPath(); ctx.moveTo(-20+i*6, 100+i*4); ctx.lineTo(-20+i*6, 220); ctx.stroke(); }
+                    ctx.beginPath();
+                    for(let i=0; i<200; i++) {
+                        const r = i*1.2; const a = i*0.1;
+                        const px = r * Math.cos(a); const py = 40 - r * Math.sin(a);
+                        if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+                    }
+                    ctx.stroke();
+                    break;
+                case 1: // I. The Magician
+                    drawInfinity(50, 0, -180);
+                    ctx.beginPath(); ctx.moveTo(0, -140); ctx.lineTo(0, 140); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0, -60); ctx.lineTo(-80, -120); ctx.moveTo(0, 0); ctx.lineTo(80, 80); ctx.stroke();
+                    ctx.strokeRect(-100, 140, 200, 20); ctx.beginPath(); ctx.moveTo(-80, 160); ctx.lineTo(-80, 220); ctx.moveTo(80, 160); ctx.lineTo(80, 220); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(-70, 120); ctx.lineTo(-50, 120); ctx.moveTo(-60, 140); ctx.lineTo(-60, 100); ctx.stroke(); 
+                    ctx.beginPath(); ctx.arc(-20, 120, 15, 0, Math.PI); ctx.lineTo(-20, 140); ctx.stroke(); 
+                    drawStar(15, 5, -Math.PI/2, 2, 20, 120); 
+                    ctx.beginPath(); ctx.moveTo(50, 140); ctx.lineTo(70, 100); ctx.stroke(); 
+                    break;
+                case 2: // II. The High Priestess
+                    ctx.fillStyle = '#111'; ctx.fillRect(-120, -50, 40, 270); ctx.strokeRect(-120, -50, 40, 270);
+                    ctx.fillStyle = '#e0b876'; ctx.fillRect(80, -50, 40, 270); ctx.strokeRect(80, -50, 40, 270);
+                    ctx.beginPath(); ctx.rect(-130, -70, 60, 20); ctx.rect(70, -70, 60, 20); ctx.stroke();
+                    drawStar(20, 6, 0, 2, -100, -80); drawStar(20, 6, 0, 2, 100, -80);
+                    ctx.beginPath(); ctx.arc(0, 180, 40, -Math.PI/2, Math.PI/2, true); ctx.arc(15, 180, 40, Math.PI/2, -Math.PI/2, false); ctx.stroke();
+                    ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(-80, -40); ctx.lineTo(80, -40); ctx.stroke(); ctx.setLineDash([]);
+                    for(let i=0; i<5; i++) { ctx.beginPath(); ctx.arc(-60+i*30, -20, 10, 0, Math.PI*2); ctx.stroke(); }
+                    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-40, 100); ctx.lineTo(40, 100); ctx.closePath(); ctx.stroke();
+                    ctx.strokeRect(-20, 100, 40, 60);
+                    break;
+                case 3: // III. The Empress
+                    for(let i=0; i<12; i++) { drawStar(8, 6, 0, 2, Math.cos(i * Math.PI/6)*70, -120 + Math.sin(i * Math.PI/6)*70); }
+                    ctx.beginPath(); ctx.moveTo(0, -60); ctx.quadraticCurveTo(-100, 80, -120, 220); ctx.quadraticCurveTo(0, 200, 120, 220); ctx.quadraticCurveTo(100, 80, 0, -60); ctx.stroke();
+                    for(let i=0; i<10; i++) { ctx.beginPath(); ctx.moveTo(0, -60); ctx.quadraticCurveTo(-100+i*20, 80, -120+i*24, 220); ctx.stroke(); }
+                    ctx.beginPath(); ctx.arc(80, 120, 30, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(80, 120, 20, 0, Math.PI*2); ctx.stroke(); 
+                    ctx.beginPath(); ctx.arc(80, 120, 8, 0, Math.PI*2); ctx.moveTo(80,128); ctx.lineTo(80,140); ctx.moveTo(70,135); ctx.lineTo(90,135); ctx.stroke();
+                    ctx.beginPath(); for(let i=0; i<10; i++){ ctx.moveTo(-160, 40+i*5); ctx.quadraticCurveTo(-100, 60+i*10, -50, 220); } ctx.stroke();
+                    break;
+                case 4: // IV. The Emperor
+                    ctx.beginPath(); ctx.moveTo(-160, 220); ctx.lineTo(-80, 50); ctx.lineTo(0, 220); ctx.moveTo(0, 220); ctx.lineTo(80, 20); ctx.lineTo(160, 220); ctx.stroke();
+                    for(let i=0; i<5; i++) { ctx.beginPath(); ctx.moveTo(-80, 50); ctx.lineTo(-80+i*15, 220); ctx.moveTo(80, 20); ctx.lineTo(80-i*15, 220); ctx.stroke(); }
+                    ctx.strokeRect(-60, 40, 120, 120); ctx.strokeRect(-50, 50, 100, 100);
+                    ctx.beginPath(); ctx.moveTo(-60, 40); ctx.arc(-80, 20, 20, 0, -Math.PI); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(60, 40); ctx.arc(80, 20, 20, Math.PI, 0); ctx.stroke();
+                    ctx.strokeRect(-30, -50, 60, 90); ctx.beginPath(); ctx.moveTo(-30, -50); ctx.lineTo(0, -90); ctx.lineTo(30, -50); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(40, -10, 10, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.ellipse(-40, -20, 5, 10, 0, 0, Math.PI*2); ctx.moveTo(-40, -10); ctx.lineTo(-40, 10); ctx.moveTo(-45, 0); ctx.lineTo(-35, 0); ctx.stroke();
+                    break;
+                case 5: // V. The Hierophant
+                    ctx.strokeRect(-120, -100, 30, 320); ctx.strokeRect(90, -100, 30, 320);
+                    drawPoly(15, 3, Math.PI/2, -105, -115); drawPoly(15, 3, Math.PI/2, 105, -115);
+                    ctx.beginPath(); ctx.moveTo(-30, -100); ctx.lineTo(30, -100); ctx.lineTo(20, -160); ctx.lineTo(-20, -160); ctx.closePath(); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(-25, -120); ctx.lineTo(25, -120); ctx.moveTo(-23, -140); ctx.lineTo(23, -140); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(-40, 120); ctx.lineTo(-40, -80); ctx.moveTo(-50, -80); ctx.lineTo(-30, -80); ctx.moveTo(-47, -90); ctx.lineTo(-33, -90); ctx.moveTo(-44, -100); ctx.lineTo(-36, -100); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(-20, 160); ctx.lineTo(20, 200); ctx.moveTo(-20, 200); ctx.lineTo(20, 160); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(-25, 155, 8, 0, Math.PI*2); ctx.arc(25, 155, 8, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(-60, 220); ctx.lineTo(-40, 150); ctx.lineTo(-20, 220); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(60, 220); ctx.lineTo(40, 150); ctx.lineTo(20, 220); ctx.stroke();
+                    break;
+                case 6: // VI. The Lovers
+                    drawRays(0, -150, 40, 180, 48);
+                    ctx.beginPath(); ctx.arc(0, -150, 40, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0, -100); ctx.quadraticCurveTo(-120, -100, -160, 0); ctx.quadraticCurveTo(-100, -50, 0, -100); ctx.stroke(); 
+                    for(let i=0; i<10; i++) { ctx.beginPath(); ctx.moveTo(0, -100); ctx.quadraticCurveTo(-120, -100+i*10, -160, i*10); ctx.stroke(); }
+                    ctx.beginPath(); ctx.moveTo(0, -100); ctx.quadraticCurveTo(120, -100, 160, 0); ctx.quadraticCurveTo(100, -50, 0, -100); ctx.stroke(); 
+                    for(let i=0; i<10; i++) { ctx.beginPath(); ctx.moveTo(0, -100); ctx.quadraticCurveTo(120, -100+i*10, 160, i*10); ctx.stroke(); }
+                    drawPoly(50, 5, -Math.PI/2, -80, 80); 
+                    drawStar(50, 8, -Math.PI/2, 3, 80, 80); 
+                    ctx.beginPath(); ctx.moveTo(80, 130); ctx.quadraticCurveTo(50, 80, 80, 30); ctx.quadraticCurveTo(110, -20, 80, -70); ctx.stroke(); 
+                    ctx.beginPath(); ctx.ellipse(-40, 150, 20, 70, 0, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.ellipse(40, 150, 20, 70, 0, 0, Math.PI*2); ctx.stroke();
+                    break;
+                case 7: // VII. The Chariot
+                    ctx.strokeRect(-90, -160, 180, 40);
+                    for(let i=0; i<5; i++) drawStar(6, 6, 0, 2, -70+i*35, -140);
+                    ctx.strokeRect(-90, -120, 10, 160); ctx.strokeRect(80, -120, 10, 160);
+                    ctx.beginPath(); ctx.moveTo(-60, 40); ctx.lineTo(60, 40); ctx.lineTo(80, 120); ctx.lineTo(0, 160); ctx.lineTo(-80, 120); ctx.closePath(); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(0, 60, 15, 0, Math.PI*2); ctx.moveTo(-15, 60); ctx.lineTo(-40, 50); ctx.moveTo(15, 60); ctx.lineTo(40, 50); ctx.stroke();
+                    ctx.fillStyle = '#e0b876'; ctx.fillRect(-80, 170, 40, 50); ctx.strokeRect(-80, 170, 40, 50);
+                    ctx.fillStyle = '#111'; ctx.fillRect(40, 170, 40, 50); ctx.strokeRect(40, 170, 40, 50); ctx.fillStyle = '#e0b876';
+                    ctx.beginPath(); ctx.arc(-50, -20, 15, -Math.PI/2, Math.PI/2, true); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(50, -20, 15, Math.PI/2, -Math.PI/2, false); ctx.stroke();
+                    break;
+                case 8: // VIII. Strength
+                    drawInfinity(30, 0, -160);
+                    ctx.beginPath(); ctx.moveTo(0, -120); ctx.quadraticCurveTo(-60, -40, -40, 120); ctx.quadraticCurveTo(-20, 200, -60, 220); ctx.stroke();
+                    for(let i=0; i<15; i++) { ctx.beginPath(); ctx.moveTo(0, -120); ctx.quadraticCurveTo(-60+i*8, -40+i*5, -40+i*6, 120); ctx.stroke(); }
+                    for(let i=0; i<36; i++) {
+                        const a = i * Math.PI*2/36;
+                        ctx.beginPath(); ctx.moveTo(40, 60); ctx.quadraticCurveTo(40+Math.cos(a+0.5)*80, 60+Math.sin(a+0.5)*80, 40+Math.cos(a)*100, 60+Math.sin(a)*100); ctx.stroke();
+                    }
+                    ctx.beginPath(); ctx.arc(40, 60, 30, 0, Math.PI*2); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(-20, -40); ctx.lineTo(40, 30); ctx.stroke();
+                    break;
+                case 9: // IX. The Hermit
+                    ctx.fillStyle = '#0a0a14';
+                    ctx.beginPath(); ctx.moveTo(-160, 220); ctx.lineTo(-20, -60); ctx.lineTo(160, 220); ctx.fill(); ctx.stroke();
+                    for(let i=0; i<6; i++) { ctx.beginPath(); ctx.moveTo(-20, -60); ctx.lineTo(-80+i*40, 220); ctx.stroke(); }
+                    ctx.fillStyle = '#e0b876';
+                    ctx.beginPath(); ctx.moveTo(-20, -140); ctx.lineTo(-60, 120); ctx.lineTo(40, 120); ctx.closePath(); ctx.stroke();
+                    for(let i=0; i<8; i++) { ctx.beginPath(); ctx.moveTo(-20, -140); ctx.lineTo(-60+i*12, 120); ctx.stroke(); }
+                    ctx.strokeRect(-90, -110, 30, 40);
+                    drawRays(-75, -90, 5, 60, 18);
+                    drawStar(10, 6, 0, 2, -75, -90);
+                    ctx.beginPath(); ctx.moveTo(30, -160); ctx.lineTo(50, 150); ctx.stroke();
+                    break;
+                case 10: // X. Wheel of Fortune
+                    ctx.beginPath(); ctx.arc(0, 0, 120, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(0, 0, 90, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(0, 0, 30, 0, Math.PI*2); ctx.stroke();
+                    for(let i=0; i<8; i++) {
+                        const a = i * Math.PI*2/8;
+                        ctx.beginPath(); ctx.moveTo(Math.cos(a)*30, Math.sin(a)*30); ctx.lineTo(Math.cos(a)*120, Math.sin(a)*120); ctx.stroke();
+                    }
+                    for(let i=0; i<4; i++) {
+                        const a = i * Math.PI/2 + Math.PI/4;
+                        drawPoly(10, 3, Math.PI/2, Math.cos(a)*105, Math.sin(a)*105);
+                    }
+                    drawStar(30, 5, 0, 2, -120, -180); 
+                    drawPoly(20, 3, 0, 120, -180); 
+                    ctx.beginPath(); ctx.arc(-120, 180, 20, 0, Math.PI*2); for(let i=0; i<8; i++) { ctx.moveTo(-120, 180); ctx.lineTo(-120+Math.cos(i*Math.PI/4)*30, 180+Math.sin(i*Math.PI/4)*30); } ctx.stroke(); 
+                    ctx.strokeRect(100, 160, 40, 40); ctx.beginPath(); ctx.moveTo(100, 160); ctx.lineTo(140, 200); ctx.moveTo(140, 160); ctx.lineTo(100, 200); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(0, -120); ctx.lineTo(-20, -160); ctx.lineTo(20, -160); ctx.closePath(); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(-120, 0); ctx.lineTo(-160, -40); ctx.lineTo(-140, 20); ctx.closePath(); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(120, 0); ctx.lineTo(160, 40); ctx.lineTo(140, -20); ctx.closePath(); ctx.stroke(); 
+                    break;
+                case 11: // XI. Justice
+                    ctx.beginPath(); ctx.moveTo(0, -180); ctx.lineTo(0, 180); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(-30, -180); ctx.lineTo(0, -210); ctx.lineTo(30, -180); ctx.lineTo(0, 180); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(-40, 100); ctx.lineTo(40, 100); ctx.stroke(); 
+                    ctx.beginPath(); ctx.arc(0, 140, 15, 0, Math.PI*2); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(-100, -80); ctx.lineTo(100, -80); ctx.stroke(); 
+                    ctx.beginPath(); ctx.arc(0, -80, 20, 0, Math.PI*2); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(-100, -80); ctx.lineTo(-140, 20); ctx.lineTo(-60, 20); ctx.closePath(); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(-100, -80); ctx.lineTo(-100, 20); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(-100, 20, 40, 0, Math.PI); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(100, -80); ctx.lineTo(60, 20); ctx.lineTo(140, 20); ctx.closePath(); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(100, -80); ctx.lineTo(100, 20); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(100, 20, 40, 0, Math.PI); ctx.stroke();
+                    ctx.setLineDash([10, 10]);
+                    ctx.beginPath(); ctx.moveTo(-130, -200); ctx.lineTo(-130, 220); ctx.moveTo(130, -200); ctx.lineTo(130, 220); ctx.stroke();
+                    ctx.setLineDash([]);
+                    break;
+                case 12: // XII. The Hanged Man
+                    ctx.fillStyle = '#0a0a14';
+                    ctx.fillRect(-20, -200, 40, 420); ctx.strokeRect(-20, -200, 40, 420); 
+                    ctx.fillRect(-100, -200, 200, 40); ctx.strokeRect(-100, -200, 200, 40); 
+                    ctx.fillStyle = '#e0b876';
+                    for(let i=0; i<16; i++) {
+                        const a = i * Math.PI*2/16;
+                        ctx.beginPath(); ctx.moveTo(Math.cos(a)*40, 140+Math.sin(a)*40); ctx.lineTo(Math.cos(a)*100, 140+Math.sin(a)*100); ctx.stroke();
+                    }
+                    ctx.beginPath(); ctx.arc(0, 140, 40, 0, Math.PI*2); ctx.stroke();
+                    ctx.strokeRect(-20, -160, 40, 180); 
+                    ctx.beginPath(); ctx.moveTo(0, -80); ctx.lineTo(-60, -40); ctx.lineTo(-60, 0); ctx.lineTo(0, 0); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(-60, 60); ctx.lineTo(60, 60); ctx.lineTo(0, 140); ctx.closePath(); ctx.stroke();
+                    break;
+                case 13: // XIII. Death
+                    drawRays(0, 180, 40, 300, 32, -Math.PI);
+                    ctx.beginPath(); ctx.arc(0, 180, 40, Math.PI, 0); ctx.stroke();
+                    ctx.strokeRect(-140, -100, 20, 320); ctx.strokeRect(120, -100, 20, 320);
+                    ctx.lineWidth = 3;
+                    ctx.beginPath(); ctx.moveTo(100, -180); ctx.quadraticCurveTo(-150, -120, -100, 100); ctx.stroke();
+                    ctx.lineWidth = 1;
+                    ctx.beginPath(); ctx.moveTo(-100, 100); ctx.lineTo(-80, -80); ctx.quadraticCurveTo(-130, -120, 100, -180); ctx.stroke(); 
+                    for(let i=0; i<12; i++) { 
+                        ctx.beginPath(); ctx.ellipse(-20, -40+i*10, 40-i*2, 5, 0, 0, Math.PI*2); ctx.stroke();
+                    }
+                    ctx.strokeRect(20, -150, 100, 80);
+                    drawStar(20, 5, -Math.PI/2, 2, 70, -110);
+                    ctx.beginPath(); ctx.arc(70, -110, 30, 0, Math.PI*2); ctx.stroke();
+                    for(let i=0; i<5; i++) { ctx.beginPath(); ctx.ellipse(70, -110, 10, 30, i*Math.PI*2/5, 0, Math.PI*2); ctx.stroke(); }
+                    break;
+                case 14: // XIV. Temperance
+                    ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(-180, -180, -100, -280); ctx.quadraticCurveTo(-60, -100, 0, 0); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(180, -180, 100, -280); ctx.quadraticCurveTo(60, -100, 0, 0); ctx.stroke();
+                    for(let i=0; i<5; i++) {
+                        ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(-180+i*20, -180, -100+i*10, -280); ctx.stroke();
+                        ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(180-i*20, -180, 100-i*10, -280); ctx.stroke();
+                    }
+                    ctx.strokeRect(-30, -80, 60, 60);
+                    drawPoly(25, 3, -Math.PI/2, 0, -50);
+                    ctx.strokeRect(-80, 20, 40, 50); ctx.strokeRect(40, 80, 40, 50);
+                    ctx.beginPath(); for(let i=0; i<10; i++) { ctx.moveTo(-40, 45+i*2); ctx.quadraticCurveTo(20, 40+i*10, 40, 95+i*2); } ctx.stroke();
+                    drawRays(0, -160, 15, 60, 24); ctx.beginPath(); ctx.arc(0, -160, 15, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.ellipse(-60, 200, 80, 20, 0, 0, Math.PI*2); ctx.stroke(); 
+                    drawWaves(200, 5, 0.1, 50); 
+                    break;
+                case 15: // XV. The Devil
+                    drawStar(140, 5, Math.PI/2, 2, 0, -20);
+                    ctx.beginPath(); ctx.arc(0, -20, 140, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(-60, -60); ctx.lineTo(0, 40); ctx.lineTo(60, -60); ctx.lineTo(0, -20); ctx.closePath(); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(-40, -40); ctx.quadraticCurveTo(-100, -120, -120, -40); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(40, -40); ctx.quadraticCurveTo(100, -120, 120, -40); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(-10, -80); ctx.lineTo(10, -80); ctx.lineTo(0, -160); ctx.closePath(); ctx.stroke(); drawWaves(-160, 10, 0.4, 20);
+                    ctx.fillStyle = '#0a0a14'; ctx.fillRect(-60, 120, 120, 100); ctx.strokeRect(-60, 120, 120, 100); ctx.fillStyle = '#e0b876';
+                    ctx.beginPath(); ctx.moveTo(-60, 120); ctx.lineTo(-40, 100); ctx.lineTo(80, 100); ctx.lineTo(60, 120); ctx.stroke(); ctx.beginPath(); ctx.moveTo(80, 100); ctx.lineTo(80, 200); ctx.lineTo(60, 220); ctx.stroke();
+                    for(let i=0; i<10; i++) {
+                        ctx.beginPath(); ctx.ellipse(-60-i*10, 120+i*10, 8, 4, Math.PI/4, 0, Math.PI*2); ctx.stroke();
+                        ctx.beginPath(); ctx.ellipse(60+i*10, 120+i*10, 8, 4, -Math.PI/4, 0, Math.PI*2); ctx.stroke();
+                    }
+                    ctx.strokeRect(-160, 200, 30, 40); drawPoly(15, 3, Math.PI/2, -145, 180);
+                    ctx.strokeRect(130, 200, 30, 40); drawPoly(15, 3, Math.PI/2, 145, 180);
+                    break;
+                case 16: // XVI. The Tower
+                    ctx.fillStyle = '#e0b876';
+                    ctx.beginPath(); ctx.moveTo(-80, -220); ctx.lineTo(-20, -100); ctx.lineTo(20, -120); ctx.lineTo(40, 20); ctx.lineTo(-10, -20); ctx.lineTo(-50, 40); ctx.lineTo(60, 220); ctx.stroke();
+                    ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(-60, -220); ctx.lineTo(0, -100); ctx.lineTo(40, -120); ctx.lineTo(60, 20); ctx.lineTo(10, -20); ctx.lineTo(-30, 40); ctx.lineTo(80, 220); ctx.stroke(); ctx.lineWidth = 1;
+                    ctx.strokeRect(-50, 0, 100, 220);
+                    for(let y=0; y<220; y+=20) { ctx.beginPath(); ctx.moveTo(-50, y); ctx.lineTo(50, y); ctx.stroke(); for(let x=-50; x<50; x+=25) { if((y/20)%2===0) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y+20); ctx.stroke(); } else { ctx.beginPath(); ctx.moveTo(x+12.5, y); ctx.lineTo(x+12.5, y+20); ctx.stroke(); } } }
+                    ctx.beginPath(); ctx.moveTo(-60, 0); ctx.lineTo(-80, -60); ctx.lineTo(-20, -20); ctx.lineTo(0, -80); ctx.lineTo(40, -40); ctx.lineTo(80, -100); ctx.lineTo(60, 0); ctx.stroke();
+                    ctx.save(); ctx.translate(-80, -120); ctx.rotate(-Math.PI/4); ctx.strokeRect(-30, -10, 60, 20); drawPoly(10, 3, Math.PI/2, -20, -20); drawPoly(10, 3, Math.PI/2, 0, -20); drawPoly(10, 3, Math.PI/2, 20, -20); ctx.restore();
+                    for(let i=0; i<22; i++) {
+                        const x = (Math.random()-0.5)*300; const y = (Math.random()-0.5)*400;
+                        ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x-10, y+10, x, y+20); ctx.quadraticCurveTo(x+10, y+10, x, y); ctx.stroke();
+                    }
+                    break;
+                case 17: // XVII. The Star
+                    drawStar(80, 8, 0, 3, 0, -120);
+                    drawStar(40, 8, Math.PI/8, 3, 0, -120);
+                    for(let i=0; i<7; i++) {
+                        const a = i * Math.PI*2/7 + Math.PI/2;
+                        drawStar(20, 8, 0, 3, Math.cos(a)*140, -120+Math.sin(a)*100);
+                    }
+                    ctx.beginPath(); ctx.moveTo(-20, 20); ctx.lineTo(40, 20); ctx.lineTo(20, 100); ctx.lineTo(-40, 100); ctx.closePath(); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(-40, 100); ctx.lineTo(-80, 120); ctx.lineTo(-60, 180); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(20, 100); ctx.lineTo(60, 160); ctx.lineTo(20, 200); ctx.stroke(); 
+                    ctx.strokeRect(-90, 100, 20, 30); ctx.beginPath(); for(let i=0; i<5; i++) { ctx.moveTo(-80, 130); ctx.quadraticCurveTo(-80+Math.random()*20, 180, -100, 220); } ctx.stroke();
+                    ctx.strokeRect(50, 80, 20, 30); ctx.beginPath(); for(let i=0; i<5; i++) { ctx.moveTo(60, 110); ctx.quadraticCurveTo(80+Math.random()*20, 160, 60, 220); } ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0, 180); ctx.quadraticCurveTo(-80, 140, -160, 220); ctx.stroke(); drawWaves(200, 8, 0.2, 50);
+                    break;
+                case 18: // XVIII. The Moon
+                    ctx.beginPath(); ctx.arc(0, -100, 80, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(30, -120, 60, Math.PI/2, -Math.PI, true); ctx.stroke();
+                    drawRays(0, -100, 80, 140, 32);
+                    for(let i=0; i<15; i++) {
+                        const a = i * Math.PI/15;
+                        const r = 160 + Math.random()*40;
+                        const x = Math.cos(a)*r; const y = -100+Math.sin(a)*r;
+                        ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x-5, y+10, x, y+15); ctx.quadraticCurveTo(x+5, y+10, x, y); ctx.fill();
+                    }
+                    ctx.strokeRect(-160, 0, 40, 220); ctx.strokeRect(120, 0, 40, 220);
+                    ctx.beginPath(); ctx.moveTo(-40, 220); ctx.quadraticCurveTo(0, 120, -10, 40); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(40, 220); ctx.quadraticCurveTo(0, 120, 10, 40); ctx.stroke();
+                    for(let y=40; y<220; y+=10) { ctx.beginPath(); ctx.moveTo(-40+(220-y)*0.2, y); ctx.lineTo(40-(220-y)*0.2, y); ctx.stroke(); }
+                    ctx.beginPath(); ctx.moveTo(-80, 140); ctx.lineTo(-60, 100); ctx.lineTo(-100, 100); ctx.closePath(); ctx.stroke(); ctx.beginPath(); ctx.arc(-80, 160, 20, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(80, 140); ctx.lineTo(100, 100); ctx.lineTo(60, 100); ctx.closePath(); ctx.stroke(); ctx.beginPath(); ctx.arc(80, 160, 20, 0, Math.PI*2); ctx.stroke();
+                    drawWaves(200, 4, 0.3, 50);
+                    ctx.strokeRect(-20, 180, 40, 40); drawPoly(15, 3, 0, -30, 200); drawPoly(15, 3, Math.PI, 30, 200);
+                    break;
+                case 19: // XIX. The Sun
+                    ctx.beginPath(); ctx.arc(0, -80, 60, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(0, -80, 50, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(-20, -90, 8, 0, Math.PI*2); ctx.arc(20, -90, 8, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(0, -70, 20, 0, Math.PI); ctx.stroke();
+                    for(let i=0; i<22; i++) {
+                        const a = i * Math.PI*2/22;
+                        ctx.save(); ctx.translate(0, -80); ctx.rotate(a);
+                        if(i%2===0) { ctx.beginPath(); ctx.moveTo(60, 0); ctx.lineTo(180, 0); ctx.stroke(); } 
+                        else { ctx.beginPath(); ctx.moveTo(60, 0); ctx.quadraticCurveTo(100, 40, 180, 0); ctx.stroke(); }
+                        ctx.restore();
+                    }
+                    ctx.strokeRect(-160, 80, 320, 60); for(let x=-160; x<160; x+=20) { ctx.beginPath(); ctx.moveTo(x, 80); ctx.lineTo(x, 140); ctx.stroke(); }
+                    for(let i=0; i<4; i++) { const fx = -120 + i*80; drawStar(15, 8, 0, 3, fx, 50); ctx.beginPath(); ctx.moveTo(fx, 65); ctx.lineTo(fx, 80); ctx.stroke(); }
+                    ctx.beginPath(); ctx.moveTo(-60, 180); ctx.lineTo(60, 180); ctx.lineTo(80, 220); ctx.lineTo(-80, 220); ctx.closePath(); ctx.stroke(); 
+                    ctx.beginPath(); ctx.arc(0, 140, 20, 0, Math.PI*2); ctx.moveTo(0, 160); ctx.lineTo(0, 180); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(0, 140); ctx.lineTo(100, 100); ctx.lineTo(120, 140); ctx.lineTo(0, 140); ctx.stroke();
+                    drawPoly(10, 4, 0, 70, 120);
+                    break;
+                case 20: // XX. Judgement
+                    ctx.beginPath(); ctx.arc(0, -150, 30, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0, -150); ctx.quadraticCurveTo(-160, -220, -160, -80); ctx.quadraticCurveTo(-80, -120, 0, -150); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0, -150); ctx.quadraticCurveTo(160, -220, 160, -80); ctx.quadraticCurveTo(80, -120, 0, -150); ctx.stroke();
+                    for(let i=0; i<8; i++) { ctx.beginPath(); ctx.moveTo(0, -150); ctx.quadraticCurveTo(-160, -220+i*15, -160, -80); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0, -150); ctx.quadraticCurveTo(160, -220+i*15, 160, -80); ctx.stroke(); }
+                    drawRays(0, -150, 40, 100, 24, Math.PI/2);
+                    ctx.beginPath(); ctx.moveTo(-20, -120); ctx.lineTo(80, -20); ctx.lineTo(100, -30); ctx.lineTo(0, -130); ctx.closePath(); ctx.stroke();
+                    ctx.strokeRect(40, -80, 60, 40); ctx.beginPath(); ctx.moveTo(70, -80); ctx.lineTo(70, -40); ctx.moveTo(40, -60); ctx.lineTo(100, -60); ctx.stroke(); 
+                    drawWaves(80, 5, 0.2, 50);
+                    ctx.strokeRect(-120, 120, 60, 120); ctx.strokeRect(60, 120, 60, 120); ctx.strokeRect(-40, 160, 80, 80);
+                    ctx.beginPath(); ctx.moveTo(-90, 180); ctx.lineTo(-90, 120); ctx.moveTo(90, 180); ctx.lineTo(90, 120); ctx.moveTo(0, 200); ctx.lineTo(0, 160); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(-90, 110, 15, 0, Math.PI*2); ctx.arc(90, 110, 15, 0, Math.PI*2); ctx.arc(0, 140, 20, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(-90, 130); ctx.lineTo(-120, 80); ctx.moveTo(-90, 130); ctx.lineTo(-60, 80); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(90, 130); ctx.lineTo(60, 80); ctx.moveTo(90, 130); ctx.lineTo(120, 80); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0, 160); ctx.lineTo(-40, 100); ctx.moveTo(0, 160); ctx.lineTo(40, 100); ctx.stroke();
+                    break;
+                case 21: // XXI. The World
+                    for(let i=0; i<36; i++) {
+                        const a = i * Math.PI*2/36;
+                        ctx.beginPath(); ctx.ellipse(Math.cos(a)*100, Math.sin(a)*160, 15, 30, a, 0, Math.PI*2); ctx.stroke();
+                    }
+                    ctx.beginPath(); ctx.ellipse(0, 0, 100, 160, 0, 0, Math.PI*2); ctx.stroke();
+                    ctx.beginPath(); ctx.ellipse(0, 0, 80, 140, 0, 0, Math.PI*2); ctx.stroke();
+                    drawInfinity(15, 0, -160); drawInfinity(15, 0, 160);
+                    ctx.beginPath(); ctx.moveTo(0, -60); ctx.quadraticCurveTo(60, 0, 0, 80); ctx.quadraticCurveTo(-60, 0, 0, -60); ctx.stroke(); 
+                    for(let i=0; i<10; i++) { ctx.beginPath(); ctx.moveTo(0, -60); ctx.quadraticCurveTo(60-i*5, 0, 0, 80); ctx.stroke(); }
+                    ctx.beginPath(); ctx.moveTo(-40, -40); ctx.lineTo(40, -20); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(-20, 80); ctx.lineTo(-40, 140); ctx.moveTo(20, 80); ctx.lineTo(40, 120); ctx.lineTo(0, 100); ctx.stroke(); 
+                    ctx.beginPath(); ctx.moveTo(-50, -60); ctx.lineTo(-30, -20); ctx.moveTo(30, -40); ctx.lineTo(50, 0); ctx.stroke();
+                    drawStar(20, 5, 0, 2, -140, -200); 
+                    drawPoly(20, 3, 0, 140, -200); 
+                    drawRays(-140, 200, 10, 25, 12); ctx.beginPath(); ctx.arc(-140, 200, 10, 0, Math.PI*2); ctx.stroke(); 
+                    ctx.strokeRect(120, 180, 40, 40); ctx.beginPath(); ctx.moveTo(120, 180); ctx.lineTo(160, 220); ctx.stroke(); 
+                    break;
+            }
+
+            ctx.restore();
+        }
+
+        function createTextureBase(isFront, index) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 1024;
+            const ctx = canvas.getContext('2d');
+            
+            // 深邃背景
+            const grad = ctx.createLinearGradient(0, 0, 0, 1024);
+            grad.addColorStop(0, '#0a0a0c');
+            grad.addColorStop(1, '#1b1b22');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 512, 1024);
+
+            // 中古华丽边框
+            ctx.strokeStyle = '#cda153';
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = 14;
+            ctx.strokeRect(20, 20, 472, 984);
+            ctx.lineWidth = 4;
+            ctx.strokeRect(40, 40, 432, 944);
+            
+            // 四角装饰锚点
+            ctx.fillStyle = '#cda153';
+            const r = 12;
+            [[40,40], [472,40], [40, 984], [472, 984]].forEach(([x,y]) => {
+                ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+            });
+
+            if (!isFront) {
+                // 背面：复杂古典花纹 + 铃兰
+                ctx.save();
+                ctx.translate(256, 512);
+
+                // 外围多重星盘/阵法
+                ctx.strokeStyle = 'rgba(205, 161, 83, 0.2)';
+                for(let i=0; i<12; i++) {
+                    ctx.rotate(Math.PI / 6);
+                    ctx.beginPath();
+                    ctx.ellipse(0, 180, 220, 25, 0, 0, Math.PI*2);
+                    ctx.stroke();
+                }
+                
+                // 中心复古边框环
+                for (let i = 0; i < 3; i++) {
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 140 + i*15, 0, Math.PI*2);
+                    ctx.lineWidth = 2 + (i%2)*2;
+                    ctx.strokeStyle = '#cda153';
+                    ctx.stroke();
+                }
+
+                // 核心元素：铃兰 (Lily of the Valley) 优雅的曲线藤蔓
+                ctx.strokeStyle = '#cda153';
+                ctx.lineWidth = 6;
+                ctx.beginPath();
+                ctx.moveTo(0, 230);
+                ctx.quadraticCurveTo(-90, 0, 0, -280);
+                ctx.stroke();
+
+                // 纯白铃兰花朵垂坠
+                ctx.fillStyle = '#f9f9f9';
+                const flowerPos = [
+                    {x: -45, y: -200, rot: -0.6},
+                    {x: -60, y: -80, rot: -0.4},
+                    {x: -50, y: 40, rot: -0.2},
+                    {x: -15, y: 160, rot: 0}
+                ];
+                flowerPos.forEach(p => {
+                    ctx.save();
+                    ctx.translate(p.x, p.y);
+                    ctx.rotate(p.rot);
+                    // 花钟形状
+                    ctx.beginPath();
+                    ctx.moveTo(0, -18);
+                    ctx.quadraticCurveTo(28, -5, 28, 20);
+                    ctx.quadraticCurveTo(0, 32, -28, 20);
+                    ctx.quadraticCurveTo(-28, -5, 0, -18);
+                    ctx.fill();
+                    // 花蒂
+                    ctx.fillStyle = '#cda153';
+                    ctx.beginPath(); ctx.arc(0, -22, 5, 0, Math.PI*2); ctx.fill();
+                    ctx.restore();
+                });
+                ctx.restore();
+            } else {
+                // 正面：古典线稿牌面占位
+                drawArcanaArt(ctx, index);
+            }
+            
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.anisotropy = 16;
+            return tex;
+        }
+
+        // --- 创建 3D 牌组 ---
+        function createCards() {
+            const geometry = new THREE.BoxGeometry(CARD_WIDTH, CARD_HEIGHT, CARD_DEPTH);
+            const backTex = createTextureBase(false, 0);
+            const sideMat = new THREE.MeshStandardMaterial({ color: 0xcda153, roughness: 0.5, metalness: 0.8 });
+
+            for(let i=0; i<CARD_COUNT; i++) {
+                const frontTex = createTextureBase(true, i);
+                
+                // Index: +x, -x, +y, -y, +z(front), -z(back)
+                const frontMat = new THREE.MeshStandardMaterial({ map: frontTex, roughness: 0.8, metalness: 0.2 });
+                const backMat = new THREE.MeshStandardMaterial({ map: backTex, roughness: 0.8, metalness: 0.2 });
+                const materials = [sideMat, sideMat, sideMat, sideMat, frontMat, backMat];
+                
+                const card = new THREE.Mesh(geometry, materials);
+                
+                const ox = (i - CARD_COUNT/2 + 0.5) * SPACING;
+                // 隐藏于视线下方，准备入场
+                card.position.set(ox, -15, -5);
+                card.rotation.y = Math.PI; // 背面 (-z) 朝向摄像机
+                
+                card.castShadow = true;
+                card.receiveShadow = true;
+                
+                card.userData = { id: i, originalX: ox, originalY: 0, originalZ: 0, baseRotX: (Math.random() - 0.5) * 0.1 };
+                
+                cardsGroup.add(card);
+                cards.push(card);
+            }
+            scene.add(cardsGroup);
+        }
+
+        // --- 动画序列 ---
+        function triggerSpawnAnimation() {
+            state = 'SPAWNING';
+            document.getElementById('message').classList.remove('visible');
+            
+            cards.forEach((card, i) => {
+                const delay = i * 0.08;
+                gsap.to(card.position, {
+                    y: card.userData.originalY,
+                    z: card.userData.originalZ,
+                    duration: 2.5,
+                    ease: "power4.out",
+                    delay: delay
+                });
+                gsap.to(card.rotation, {
+                    x: card.userData.baseRotX, // 微微的不规则，增加真实感
+                    duration: 2.5,
+                    ease: "power4.out",
+                    delay: delay
+                });
+            });
+
+            setTimeout(() => { state = 'IDLE'; }, 2.5 * 1000 + CARD_COUNT * 80);
+        }
+
+        function drawCardObj(card) {
+            state = 'DRAWN';
+            
+            // 从序列群组中释放，保证世界坐标连续
+            const wp = new THREE.Vector3();
+            card.getWorldPosition(wp);
+            cardsGroup.remove(card);
+            scene.add(card);
+            card.position.copy(wp);
+
+            // 其余牌阵暗淡退场
+            gsap.to(cardsGroup.position, { z: -10, y: -2, duration: 2, ease: "power2.inOut" });
+            cards.forEach(c => {
+                if (c !== card) {
+                    c.material.forEach(m => {
+                        gsap.to(m.color, { r: 0.1, g: 0.1, b: 0.1, duration: 2 });
+                    });
+                }
+            });
+
+            // 抽中卡牌高亮浮前并翻转
+            gsap.to(card.position, {
+                x: 0, y: 1.0, z: 8, // Strictly center in camera's view (camera is at y:2, z:16 looking at 0,0,0)
+                duration: 2.5,
+                ease: "power3.inOut"
+            });
+            gsap.to(card.rotation, {
+                x: 0, y: 0, z: 0, // 转回正面
+                duration: 2.5,
+                ease: "power3.inOut",
+                onComplete: () => {
+                    // 正面轻微发光，间隔3秒
+                    gsap.to(card.material[4].emissive, {
+                        r: 0.05, g: 0.05, b: 0.05, 
+                        duration: 1.5, 
+                        yoyo: true, 
+                        repeat: -1, 
+                        repeatDelay: 3.0,
+                        ease: "power2.inOut"
+                    });
+                }
+            });
+        }
+
+        function returnCardObj(card) {
+            state = 'RETURNING';
+            
+            gsap.killTweensOf(card.material[4].emissive);
+            gsap.killTweensOf(card.material[5].emissive);
+
+            // Re-attach to group to move safely with it
+            cardsGroup.attach(card);
+
+            gsap.to(card.position, {
+                x: card.userData.originalX, 
+                y: card.userData.originalY, 
+                z: card.userData.originalZ,
+                duration: 1.5,
+                ease: "power3.inOut"
+            });
+            gsap.to(card.rotation, {
+                x: 0, y: Math.PI, z: 0, // 转回背面
+                duration: 1.5,
+                ease: "power3.inOut",
+                onComplete: () => {
+                    gsap.to(card.material[5].emissive, {r: 0, g: 0, b: 0, duration: 0.5});
+                    if (card.material[4]) gsap.to(card.material[4].emissive, {r: 0, g: 0, b: 0, duration: 0.5});
+                    state = 'IDLE';
+                    drawnCard = null;
+                }
+            });
+
+            // Restore other cards
+            gsap.to(cardsGroup.position, { z: 0, y: 0, duration: 1.5, ease: "power2.inOut" });
+            cards.forEach(c => {
+                if (c !== card) {
+                    c.material.forEach(m => {
+                        gsap.to(m.color, { r: 1, g: 1, b: 1, duration: 1.5 });
+                    });
+                }
+            });
+            
+            const msg = document.getElementById('message');
+            msg.classList.remove('visible');
+            const hud = document.querySelector('#bottom-hud-text p');
+            if (hud) hud.innerText = "HOVER TO REVEAL";
+        }
+
+        // --- MediaPipe 手势识别逻辑 ---
+        function initHandTracking() {
+            const videoElem = document.querySelector('.input_video');
+            const canvasElement = document.querySelector('.output_canvas');
+            const canvasCtx = canvasElement.getContext('2d');
+            
+            const hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1, // 快，省资源
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.7
+            });
+            hands.onResults(onResults);
+
+            const camObj = new Camera(videoElem, {
+                onFrame: async () => { 
+                    try {
+                        await hands.send({image: videoElem}); 
+                    } catch(e) {
+                        console.error('Hands send error', e);
+                    }
+                },
+                width: 640, height: 480
+            });
+            
+            camObj.start().then(() => {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('message').classList.add('visible');
+            }).catch(e => {
+                document.getElementById('loading').innerText = "CAMERA ACCESS DENIED";
+                document.getElementById('loading').style.color = "#ff5555";
+                document.getElementById('loading').style.opacity = "1";
+                console.error(e);
+            });
+        }
+
+        let lastShuffleTime = 0;
+
+        function shuffleCards() {
+            const now = Date.now();
+            if (now - lastShuffleTime < 1500) return;
+            if (state !== 'IDLE' && state !== 'POINTING') return;
+            lastShuffleTime = now;
+            
+            const prevState = state;
+            state = 'SHUFFLING';
+
+            const positions = cards.map(c => ({
+                id: c.userData.id,
+                ox: c.userData.originalX,
+                oy: c.userData.originalY,
+                oz: c.userData.originalZ,
+                bx: c.userData.baseRotX
+            }));
+            
+            // Fisher-Yates shuffle
+            for (let i = positions.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [positions[i], positions[j]] = [positions[j], positions[i]];
+            }
+            
+            let completed = 0;
+            cards.forEach((card, i) => {
+                const p = positions[i];
+                card.userData.originalX = p.ox;
+                card.userData.originalY = p.oy;
+                card.userData.originalZ = p.oz;
+                card.userData.baseRotX = p.bx;
+                
+                // Animate to new position with a slight pop-up
+                gsap.killTweensOf(card.position);
+                gsap.killTweensOf(card.rotation);
+                gsap.to(card.rotation, {
+                    y: Math.PI,
+                    duration: 0.4
+                });
+                gsap.to(card.position, {
+                    x: p.ox,
+                    y: p.oy + Math.random() * 1.5 + 0.5,
+                    z: p.oz + Math.random() * 1.0,
+                    duration: 0.4,
+                    ease: "power2.out",
+                    onComplete: () => {
+                        gsap.to(card.position, {
+                            x: p.ox,
+                            y: p.oy,
+                            z: p.oz,
+                            duration: 0.5,
+                            ease: "power2.inOut",
+                            onComplete: () => {
+                                completed++;
+                                if (completed === cards.length) {
+                                    state = 'IDLE';
+                                }
+                            }
+                        });
+                    }
+                });
+            });
+        }
+
+        function getDist(p1, p2) {
+            return Math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2);
+        }
+
+        function onResults(results) {
+            const canvasElement = document.querySelector('.output_canvas');
+            const canvasCtx = canvasElement.getContext('2d');
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            const calib = document.getElementById('calib-lvl');
+
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                if (calib) calib.innerText = "WAITING FOR HAND";
+                canvasCtx.restore();
+                return;
+            }
+            if (calib) calib.innerText = "TRACKING ACTIVE";
+
+            const marks = results.multiHandLandmarks[0];
+            
+            if (window.drawConnectors) {
+                drawConnectors(canvasCtx, marks, HAND_CONNECTIONS, {color: '#c4a163', lineWidth: 4});
+                drawLandmarks(canvasCtx, marks, {color: '#ffffff', lineWidth: 1, radius: 3});
+            }
+            canvasCtx.restore();
+
+            const wrist = marks[0];
+            const thumb = marks[4];
+            const index = marks[8];
+            const middle = marks[12];
+            const ring = marks[16];
+            const pinky = marks[20];
+
+            // 图像是镜像的 (ScaleX: -1)，X翻转计算物理意义上的位置
+            const physicalX = 1 - wrist.x; 
+            const physicalY = wrist.y;
+            const indexPxX = (1 - index.x) * window.innerWidth;
+            const indexPxY = index.y * window.innerHeight;
+            
+            const velocityX = physicalX - prevHandX;
+            prevHandX = physicalX;
+
+            const velocityY = physicalY - prevHandY;
+            prevHandY = physicalY;
+
+            const baseSize = getDist(wrist, marks[5]) || 0.1;
+
+            // 分析姿态: 指尖到手腕的距离 > 较低关节点到手腕的距离
+            const iExt = getDist(wrist, index) > getDist(wrist, marks[6]);
+            const mExt = getDist(wrist, middle) > getDist(wrist, marks[10]);
+            const rExt = getDist(wrist, ring) > getDist(wrist, marks[14]);
+            const pExt = getDist(wrist, pinky) > getDist(wrist, marks[18]);
+
+            const isOpenPalm = iExt && mExt && rExt && pExt;
+            const isPointing = iExt && !mExt && !rExt && !pExt;
+            const isPinching = getDist(thumb, index) < 0.05 && !mExt && !rExt;
+
+            const cursor = document.getElementById('cursor');
+
+            if (state === 'INIT') {
+                if (isOpenPalm && Math.abs(velocityX) > 0.02) {
+                    triggerSpawnAnimation();
+                    const hud = document.querySelector('#bottom-hud-text p');
+                    if (hud) hud.innerText = "HOVER TO REVEAL";
+                }
+            } else if (state === 'IDLE') {
+                // 更新高亮手部点
+                cursor.style.display = 'block';
+                cursor.style.transform = `translate(${indexPxX}px, ${indexPxY}px)`;
+                
+                // 刹车与滑动（惯性控制）
+                if (isOpenPalm) {
+                    scrollVelocity *= 0.82; // 张开手缓缓停止
+
+                    // 检测快速水平挥手来打乱牌阵
+                    if (Math.abs(velocityX) > 0.06) {
+                        shuffleCards();
+                    }
+                } else if (!isPointing && !isPinching) {
+                    if (Math.abs(velocityX) > 0.005) {
+                        scrollVelocity += velocityX * 1.8; // 推牌阻尼增量
+                    }
+                }
+                
+                if (isPointing) {
+                    state = 'POINTING';
+                }
+            } else if (state === 'POINTING') {
+                cursor.style.display = 'block';
+                cursor.style.transform = `translate(${indexPxX}px, ${indexPxY}px)`;
+
+                // 物理坐标转换 WebGL NDC
+                const ndcX = (indexPxX / window.innerWidth) * 2 - 1;
+                const ndcY = -(indexPxY / window.innerHeight) * 2 + 1;
+                
+                raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+                const intersects = raycaster.intersectObjects(cards);
+
+                if (intersects.length > 0) {
+                    const hit = intersects[0].object;
+                    if (hoveredCard !== hit) {
+                        // 还原上一张
+                        if (hoveredCard) clearHover(hoveredCard);
+                        hoveredCard = hit;
+                        // 高亮这一张，闪一下
+                        gsap.to(hit.material[5].emissive, { r: 0.3, g: 0.3, b: 0.3, duration: 0.3, yoyo: true, repeat: 1 }); // 发柔光触发Bloom
+                    }
+                } else {
+                    if (hoveredCard) {
+                        clearHover(hoveredCard);
+                        hoveredCard = null;
+                        if (!isPointing) state = 'IDLE';
+                    }
+                }
+
+                if (isPinching && hoveredCard) {
+                    drawnCard = hoveredCard;
+                    cursor.style.display = 'none';
+                    drawCardObj(drawnCard);
+                    const hud = document.querySelector('#bottom-hud-text p');
+                    if (hud) hud.innerText = "WAVE DOWN TO RETURN";
+                }
+                if (!isPointing && !isPinching) {
+                    state = 'IDLE';
+                }
+            } else if (state === 'DRAWN') {
+                if (isOpenPalm && velocityY > 0.05) {
+                    returnCardObj(drawnCard);
+                }
+            } else {
+                cursor.style.display = 'none';
+            }
+        }
+
+        function clearHover(card) {
+            gsap.killTweensOf(card.material[5].emissive);
+            gsap.to(card.material[5].emissive, { r: 0, g: 0, b: 0, duration: 0.5 });
+        }
+
+
+        // --- 主帧渲染 ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // 物理惯性更新
+            if (state === 'IDLE' || state === 'POINTING') {
+                currentScrollX += scrollVelocity;
+                scrollVelocity *= 0.94; // 自然摩擦力衰减
+                
+                cardsGroup.position.x = currentScrollX;
+                
+                // 边缘阻力与限制
+                const limit = ((CARD_COUNT-1) * SPACING) / 2;
+                if (cardsGroup.position.x > limit) {
+                    cardsGroup.position.x = limit;
+                    scrollVelocity = -scrollVelocity * 0.2; // 轻微反弹
+                } else if (cardsGroup.position.x < -limit) {
+                    cardsGroup.position.x = -limit;
+                    scrollVelocity = -scrollVelocity * 0.2;
+                }
+            }
+
+            // --- 鱼眼效果 (Fish-eye Effect) ---
+            if (state !== 'INIT' && state !== 'SPAWNING' && state !== 'SHUFFLING') {
+                cards.forEach(card => {
+                    if (card !== drawnCard) {
+                        const worldX = card.userData.originalX + cardsGroup.position.x;
+                        const dist = Math.abs(worldX);
+                        
+                        const radius = 12;
+                        const maxZ = 2.5;    // 中心突出高度
+                        const maxY = 0.4;    // 中心抬高
+                        const maxRot = Math.PI / 10; // 边缘最大侧转幅度
+                        
+                        let targetZ = 0;
+                        let targetY = 0;
+                        let targetRotY = Math.PI;
+                        let targetRotX = card.userData.baseRotX || 0;
+                        
+                        if (dist < radius) {
+                            const factor = Math.cos((dist / radius) * (Math.PI / 2));
+                            const smoothFactor = factor * factor; // 强化中心凸起
+                            targetZ = maxZ * smoothFactor;
+                            targetY = maxY * smoothFactor;
+                            targetRotY = Math.PI - (worldX / radius) * maxRot;
+                        } else {
+                            targetRotY = Math.PI - Math.sign(worldX) * maxRot;
+                        }
+
+                        if (card === hoveredCard) {
+                            targetY += 0.8;
+                            targetZ += 1.0;
+                            targetRotX = -0.15;
+                        }
+                        
+                        card.position.z += (targetZ - card.position.z) * 0.12;
+                        card.position.y += (targetY - card.position.y) * 0.12;
+                        card.rotation.y += (targetRotY - card.rotation.y) * 0.12;
+                        card.rotation.x += (targetRotX - card.rotation.x) * 0.12;
+                    }
+                });
+            }
+
+            // 粒子更新
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.life -= 0.006;
+                p.mesh.material.opacity = p.life;
+                
+                const ptPos = p.mesh.geometry.attributes.position.array;
+                for (let j = 0; j < ptPos.length; j+=3) {
+                    ptPos[j] += p.vels[j/3].x;
+                    ptPos[j+1] += p.vels[j/3].y;
+                    ptPos[j+2] += p.vels[j/3].z + 0.015; // 被微风吹拂吸向前方
+                }
+                p.mesh.geometry.attributes.position.needsUpdate = true;
+                
+                if (p.life <= 0) {
+                    scene.remove(p.mesh);
+                    particles.splice(i, 1);
+                }
+            }
+
+            composer.render();
+        }
+
+        // 启动引擎
+        initThree();
+        initHandTracking();
+
+    </script>
+</body>
+</html>

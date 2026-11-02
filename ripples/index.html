@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>SHJ的小网站们-液态涟漪</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #000;
+      font-family: system-ui, -apple-system, sans-serif;
+      touch-action: none;
+    }
+    
+    #glcanvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+    }
+    
+    .ui-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      pointer-events: none;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 24px;
+    }
+
+    .top-bar {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .bottom-bar {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+    }
+
+    button {
+      pointer-events: auto;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: rgba(255, 255, 255, 0.7);
+      padding: 12px 24px;
+      border-radius: 30px;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+
+    button.active {
+      background: rgba(255, 255, 255, 0.9);
+      color: #000;
+      border-color: transparent;
+      box-shadow: 0 0 20px rgba(255,255,255,0.4);
+    }
+
+    button:hover:not(.active) {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fff;
+    }
+
+    button:active {
+      transform: scale(0.96);
+    }
+
+    #loading {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: white;
+      font-size: 16px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      pointer-events: none;
+      transition: opacity 0.5s ease;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+    }
+
+    #error-box {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      padding: 16px 24px;
+      background: rgba(220, 38, 38, 0.95);
+      color: white;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+      display: none;
+      z-index: 100;
+      backdrop-filter: blur(4px);
+      border-bottom: 1px solid rgba(255,255,255,0.2);
+      white-space: pre-wrap;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous"></script>
+<meta name="description" content="让镜头里的世界化为液体，在涟漪与晶体之间切换。">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/site-nav.css">
+</head>
+<body>
+<a class="shj-home" href="../" aria-label="返回总站：SHJ的小网站们"><span aria-hidden="true">⌂</span><span>SHJ的小网站们-液态涟漪</span></a>
+
+  <div id="error-box"></div>
+  <div id="loading">INITIALIZING SENSORS...</div>
+  
+  <video id="video-feed" playsinline style="display:none;"></video>
+  <canvas id="glcanvas"></canvas>
+
+  <div class="ui-overlay">
+    <div class="top-bar">
+      <button id="btn-camera">SWITCH CAMERA</button>
+    </div>
+    <div class="bottom-bar">
+      <button id="btn-liquid" class="active">LIQUID</button>
+      <button id="btn-crystal">CRYSTAL</button>
+    </div>
+  </div>
+
+  <script>
+    const logError = (msg) => {
+      const box = document.getElementById('error-box');
+      box.style.display = 'block';
+      box.textContent += msg + '\n';
+      console.error(msg);
+    };
+
+    /**
+     * SHADER DEFINITIONS
+     */
+    const vsSource = `
+      attribute vec2 a_position;
+      varying vec2 vUv;
+      void main() {
+        vUv = a_position * 0.5 + 0.5;
+        gl_Position = vec4(a_position, 0.0, 1.0);
+      }
+    `;
+
+    // 物理模拟着色器: Ping-pong 双缓冲 FBO
+    const fsPhysics = `
+      precision mediump float;
+      varying vec2 vUv;
+      uniform sampler2D u_heightMap; // R: current height, G: previous height
+      uniform vec2 u_texel;          // 1.0 / windowSize
+      uniform vec4 u_fingers[10];    // xy: current pos, zw: prev pos (normalized mapped space)
+      uniform float u_active[10];    // 1.0 if active, else 0.0
+      uniform vec2 u_aspect;         // vec2(width / Math.min(w,h), height / Math.min(w,h))
+      uniform float u_mode;          // 0.0=Liquid, 1.0=Crystal
+
+      void main() {
+        vec2 uv = vUv;
+        float c = texture2D(u_heightMap, uv).r;
+        float p = texture2D(u_heightMap, uv).g;
+
+        // Orthogonal neighbors
+        float right = texture2D(u_heightMap, uv + vec2(u_texel.x, 0.0)).r;
+        float left  = texture2D(u_heightMap, uv + vec2(-u_texel.x, 0.0)).r;
+        float top   = texture2D(u_heightMap, uv + vec2(0.0, u_texel.y)).r;
+        float bot   = texture2D(u_heightMap, uv + vec2(0.0, -u_texel.y)).r;
+
+        // Diagonal neighbors
+        float tr = texture2D(u_heightMap, uv + vec2(u_texel.x, u_texel.y)).r;
+        float tl = texture2D(u_heightMap, uv + vec2(-u_texel.x, u_texel.y)).r;
+        float br = texture2D(u_heightMap, uv + vec2(u_texel.x, -u_texel.y)).r;
+        float bl = texture2D(u_heightMap, uv + vec2(-u_texel.x, -u_texel.y)).r;
+
+        // 9-tap 各向同性拉普拉斯算子
+        float laplacian = (right + left + top + bot) * 0.2 + (tr + tl + br + bl) * 0.05 - c;
+
+        // 波动方程步进计算
+        // 增加扩散速度，让波纹快速漫开
+        float speed = 1.25;
+        float next_h = 2.0 * c - p + laplacian * speed;
+
+        // 统一并微调衰减，让漫开的波纹平滑变透明，且不会残留太久干扰新路径
+        float amp = abs(next_h);
+        float damping = mix(0.90, 0.96, clamp(amp * 8.0, 0.0, 1.0));
+        
+        next_h *= damping;
+
+        // 融合手指针尖交互：计算作用权重
+        float interactWeight = 0.0;
+        for(int i = 0; i < 10; i++) {
+          float act = u_active[i];
+          vec2 f_curr = u_fingers[i].xy * u_aspect;
+          vec2 f_prev = u_fingers[i].zw * u_aspect;
+          vec2 pos = uv * u_aspect;
+
+          // Capsule SDF math
+          vec2 pa = pos - f_curr;
+          vec2 ba = f_prev - f_curr;
+          float baba = dot(ba, ba);
+          float hC = clamp(dot(pa, ba) / (baba + 1e-6), 0.0, 1.0);
+          float dist = length(pa - ba * hC);
+
+          // 半径控制：保持适中，配合更快的扩散速度
+          float rippleSize = mix(0.045, 0.03, step(0.5, u_mode));
+          float ripple = smoothstep(rippleSize, 0.0, dist);
+          interactWeight = max(interactWeight, ripple * act);
+        }
+
+        // 强制压平手指区域：覆盖旧波纹，确保当前移动路径最清晰首要
+        next_h = mix(next_h, -0.4, interactWeight);
+
+        // 输出为 R: 计算后的高度，G: 当下的高度(作为渲染下一帧时的"之前高度")
+        gl_FragColor = vec4(next_h, c, 0.0, 1.0);
+      }
+    `;
+
+    // 渲染着色器 (Composite)
+    const fsRender = `
+      precision mediump float;
+      varying vec2 vUv;
+      uniform sampler2D u_heightMap;
+      uniform sampler2D u_video;
+      uniform vec2 u_texel;
+      uniform float u_mode;      // 0.0=Liquid, 1.0=Crystal
+      uniform float u_isFront;   // 1.0=Front camera
+      uniform vec2 u_videoRatio; // 视频内容比例调整
+
+      void main() {
+        vec2 uv = vUv;
+
+        // 中心差分提取法线数据
+        float c = texture2D(u_heightMap, uv).r;
+        float r = texture2D(u_heightMap, uv + vec2(u_texel.x, 0.0)).r;
+        float t = texture2D(u_heightMap, uv + vec2(0.0, u_texel.y)).r;
+        float l = texture2D(u_heightMap, uv + vec2(-u_texel.x, 0.0)).r;
+        float b = texture2D(u_heightMap, uv + vec2(0.0, -u_texel.y)).r;
+
+        // 直接使用坡度 (grad) 处理偏移，不归一化 (越陡峭的波浪对底层画面折射越大)
+        vec2 grad = vec2(r - l, t - b) * 0.5;
+        // Laplacian 项负责透镜效应曲率
+        float laplacian = (r + l + t + b) - 4.0 * c;
+
+        // 获取经过前置摄像头镜像翻转的映射视频UV
+        vec2 vid_uv = uv;
+        vid_uv.x = mix(vid_uv.x, 1.0 - vid_uv.x, step(0.5, u_isFront));
+
+        // 1. 透镜效应: 波峰像放大镜一样拉伸
+        float lensPower = mix(-0.15, -0.3, step(0.5, u_mode));
+        vec2 lensOffset = laplacian * (vid_uv - 0.5) * lensPower;
+
+        // 2. 坡度折射偏移量
+        float refracPower = mix(0.12, 0.25, step(0.5, u_mode));
+        vec2 refracOffset = grad * refracPower;
+        
+        // 修正前置摄像头下的折射方位映射
+        refracOffset.x = mix(refracOffset.x, -refracOffset.x, step(0.5, u_isFront));
+
+        vec2 baseUV = vid_uv + lensOffset + refracOffset;
+        
+        // 我们利用 videoRatio 防止采样越界，简单的 Clamp 机制
+        baseUV = clamp(baseUV, 0.0, 1.0);
+
+        // 3. 色散效果 (Chromatic Aberration)
+        float dispStrength = mix(0.012, 0.025, step(0.5, u_mode));
+        float disp = dispStrength * length(grad);
+        vec2 uvR = baseUV + baseUV * disp;
+        vec2 uvG = baseUV;
+        vec2 uvB = baseUV - baseUV * disp;
+
+        vec3 color = vec3(
+          texture2D(u_video, clamp(uvR, 0.0, 1.0)).r,
+          texture2D(u_video, clamp(uvG, 0.0, 1.0)).g,
+          texture2D(u_video, clamp(uvB, 0.0, 1.0)).b
+        );
+
+        // 4. 双瓣高光及菲涅尔反射 (Fresnel & Dual lobe Specular)
+        vec3 normal = normalize(vec3(-grad.x, -grad.y, mix(0.06, 0.02, step(0.5, u_mode))));
+        vec3 viewDir = vec3(0.0, 0.0, 1.0);
+        vec3 lightDir = normalize(vec3(0.5, 0.8, 1.0));
+        vec3 halfVector = normalize(lightDir + viewDir);
+
+        // Schlick 近似
+        float NdotV = max(dot(normal, viewDir), 0.0);
+        float f0 = mix(0.02, 0.12, step(0.5, u_mode)); // 晶体折射率高一些
+        float fresnel = f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
+
+        // 双层高光: Sharp Specular + Broad Sheen
+        float NdotH = max(dot(normal, halfVector), 0.0);
+        float sharpSpec = pow(NdotH, mix(200.0, 500.0, step(0.5, u_mode))) * mix(1.2, 2.5, step(0.5, u_mode));
+        float broadSheen = pow(NdotH, mix(25.0, 50.0, step(0.5, u_mode))) * 0.4;
+        float specular = sharpSpec + broadSheen;
+
+        // 5. 波深明暗渲染 (波峰偏暖偏亮，波谷偏冷偏暗)
+        vec3 valleyColor = vec3(0.85, 0.9, 1.05); // Cool
+        vec3 peakColor   = vec3(1.1, 1.05, 0.95); // Warm
+        vec3 depthColor  = mix(valleyColor, peakColor, smoothstep(-0.2, 0.2, c));
+
+        color *= mix(vec3(1.0), depthColor, clamp(abs(c) * 4.0, 0.0, 1.0)); // 仅波动时变色
+        color += specular;
+        
+        // 限制菲涅尔环境光反射影响，避免整个画面泛白
+        float waveActivity = clamp(length(grad) * 20.0, 0.0, 1.0);
+        color = mix(color, vec3(1.0), fresnel * waveActivity);
+
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `;
+
+    /**
+     * SYSTEM CONFIG & STATE
+     */
+    const canvas = document.getElementById('glcanvas');
+    const video = document.getElementById('video-feed');
+    const gl = canvas.getContext('webgl', { antialias: false, depth: false });
+    
+    if (!gl) {
+      logError("WebGL1 is not supported here.");
+    }
+
+    let isFrontCam = true;
+    let effectMode = 0.0; // 0.0 = LIQUID, 1.0 = CRYSTAL
+    
+    // WebGL Size Limits & Extensions
+    // 使用 EXT_color_buffer_half_float 或者回退 float 用于 FBO
+    let hasHalfFloat = gl.getExtension('OES_texture_half_float');
+    let hasHalfFloatLinear = gl.getExtension('OES_texture_half_float_linear');
+    let extColorHalfFloat = gl.getExtension('EXT_color_buffer_half_float');
+    
+    let hasFloat = gl.getExtension('OES_texture_float');
+    let extColorFloat = gl.getExtension('WEBGL_color_buffer_float');
+
+    // Shader Compile Utility
+    function createShader(gl, source, type) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        logError("Shader Compilation Error: " + gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    function createProgram(gl, vs, fs) {
+      const p = gl.createProgram();
+      gl.attachShader(p, createShader(gl, vs, gl.VERTEX_SHADER));
+      gl.attachShader(p, createShader(gl, fs, gl.FRAGMENT_SHADER));
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+        logError("Program Link Error: " + gl.getProgramInfoLog(p));
+        return null;
+      }
+      return p;
+    }
+
+    const prgSim = createProgram(gl, vsSource, fsPhysics);
+    const prgRender = createProgram(gl, vsSource, fsRender);
+
+    // Quad Buffer
+    const quadVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+
+    // Setup Video Texture
+    const videoTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, videoTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); // 让视频纹理 Y 轴朝上，与 GLSL 标准化
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    // FBO Management
+    let simWidth = 512;
+    let simHeight = 512;
+    let fboA, texA, fboB, texB;
+
+    function buildFBO(w, h, dt) {
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      // FBO 推荐使用 nearest 避免采样混合过程中的精度侵蚀导致能量衰减
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, dt, null);
+
+      const fbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+
+      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+      if (status !== gl.FRAMEBUFFER_COMPLETE) {
+        gl.deleteFramebuffer(fbo);
+        gl.deleteTexture(tex);
+        return null;
+      }
+      return { fbo, tex };
+    }
+
+    function initFBOs() {
+      // Scale FBO relative to screen width / height to keep sharp physical ratios
+      simWidth = Math.floor(window.innerWidth / 2.0);
+      simHeight = Math.floor(window.innerHeight / 2.0);
+      if (simWidth > 1024) simWidth = 1024;
+      if (simHeight > 1024) simHeight = 1024;
+      
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+
+      if (fboA) { gl.deleteFramebuffer(fboA.fbo); gl.deleteTexture(fboA.tex); fboA = null; }
+      if (fboB) { gl.deleteFramebuffer(fboB.fbo); gl.deleteTexture(fboB.tex); fboB = null; }
+
+      let typesToTry = [];
+      if (hasHalfFloat && extColorHalfFloat) typesToTry.push(hasHalfFloat.HALF_FLOAT_OES);
+      if (hasFloat && extColorFloat) typesToTry.push(gl.FLOAT);
+      if (hasHalfFloat) typesToTry.push(hasHalfFloat.HALF_FLOAT_OES);
+      if (hasFloat) typesToTry.push(gl.FLOAT);
+      typesToTry.push(gl.UNSIGNED_BYTE); // Fallback
+
+      for (let dt of typesToTry) {
+        fboA = buildFBO(simWidth, simHeight, dt);
+        fboB = buildFBO(simWidth, simHeight, dt);
+        if (fboA && fboB) {
+           break;
+        } else {
+           if (fboA) { gl.deleteFramebuffer(fboA.fbo); gl.deleteTexture(fboA.tex); fboA = null; }
+           if (fboB) { gl.deleteFramebuffer(fboB.fbo); gl.deleteTexture(fboB.tex); fboB = null; }
+        }
+      }
+
+      if (!fboA || !fboB) {
+         logError("FBO Initialization Error. Could not create Framebuffer.");
+      }
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    
+    initFBOs();
+    window.addEventListener('resize', initFBOs);
+
+    /**
+     * MEDIAPIPE TRACKING AND FINGERS MEMORY
+     */
+    let fingerPos = new Float32Array(40); // [10 x 4] x,y curr, x,y prev
+    let fingerActive = new Float32Array(10); // [10]
+    let currentFingers = Array(10).fill(null).map(() => ({x: 0, y: 0, active: false}));
+    let prevFingers = Array(10).fill(null).map(() => ({x: 0, y: 0, active: false}));
+
+    const handsInstance = new window.Hands({
+      locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${f}`
+    });
+    
+    handsInstance.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 1, // Balance Mobile Performance
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    handsInstance.onResults((results) => {
+      // 隐式隐藏当前处于检测外的所有的点
+      for(let i = 0; i < 10; i++) {
+        prevFingers[i].x = currentFingers[i].x;
+        prevFingers[i].y = currentFingers[i].y;
+        prevFingers[i].active = currentFingers[i].active;
+        currentFingers[i].active = false;
+      }
+
+      if (results.multiHandLandmarks) {
+        let idx = 0;
+        for (let hk = 0; hk < results.multiHandLandmarks.length; hk++) {
+          if (idx >= 10) break;
+          const lms = results.multiHandLandmarks[hk];
+          
+          // 我们只需要追踪五个指尖 (Tips) -> 4, 8, 12, 16, 20
+          for (const tip of [4, 8, 12, 16, 20]) {
+            if (idx >= 10) break;
+            const mk = lms[tip];
+            
+            // MediaPipe 坐标系统中0,0位于屏幕左上角。
+            //由于我们的Webgl系统 UNPACK_FLIP_Y_WEBGL 是开启的(图像底部朝下)，我们将 Y 翻转以便匹配
+            let tx = mk.x;
+            let ty = 1.0 - mk.y; 
+
+            // 如果处于镜像相机中，镜像处理
+            if (isFrontCam) { tx = 1.0 - tx; }
+
+            currentFingers[idx].x = tx;
+            currentFingers[idx].y = ty;
+            currentFingers[idx].active = true;
+
+            // 首次出现的节点平滑防止闪现大涟漪跳跃
+            if (!prevFingers[idx].active) {
+                prevFingers[idx].x = tx;
+                prevFingers[idx].y = ty;
+            }
+            idx++;
+          }
+        }
+      }
+
+      // Serialize into Float32Array immediately to limit latency
+      for (let i = 0; i < 10; i++) {
+        fingerPos[i * 4 + 0] = currentFingers[i].x;
+        fingerPos[i * 4 + 1] = currentFingers[i].y;
+        fingerPos[i * 4 + 2] = prevFingers[i].x;
+        fingerPos[i * 4 + 3] = prevFingers[i].y;
+        fingerActive[i] = currentFingers[i].active ? 1.0 : 0.0;
+      }
+    });
+
+    /**
+     * MEDIA STREAMING
+     */
+    let stream = null;
+    let isTrackingHands = false;
+    let lastTrackTime = -1;
+
+    async function initCamera() {
+      if (stream) { stream.getTracks().forEach(t => t.stop()); }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: isFrontCam ? 'user' : 'environment',
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        });
+        video.srcObject = stream;
+        await video.play();
+        const loading = document.getElementById('loading');
+        loading.style.display = 'none';
+        loading.style.pointerEvents = 'none';
+
+        // 绑定手部识别循环
+        if (!isTrackingHands) {
+          isTrackingHands = true;
+          trackRoutine();
+        }
+      } catch (err) {
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError' || err.message.includes('Permission denied')) {
+          const loading = document.getElementById('loading');
+          loading.innerHTML = 'CAMERA PERMISSION DENIED<br><br>CLICK ANYWHERE TO RETRY';
+          loading.style.pointerEvents = 'auto';
+          loading.style.cursor = 'pointer';
+        } else {
+          logError("Failed to obtain Camera access: " + err.message);
+        }
+      }
+    }
+
+    async function trackRoutine() {
+      // 避免重复检测同一帧导致卡顿
+      if (video.readyState >= 2 && video.currentTime !== lastTrackTime) {
+        lastTrackTime = video.currentTime;
+        try {
+          await handsInstance.send({ image: video });
+        } catch(e) {
+          console.warn("Handtracking error:", e);
+        }
+      }
+      requestAnimationFrame(trackRoutine);
+    }
+
+    // UI Listeners
+    document.getElementById('btn-liquid').onclick = (e) => { effectMode=0.0; updateUiTabs(e.target); };
+    document.getElementById('btn-crystal').onclick = (e) => { effectMode=1.0; updateUiTabs(e.target); };
+    document.getElementById('btn-camera').onclick = () => { isFrontCam = !isFrontCam; initCamera(); };
+    function updateUiTabs(btn) {
+      document.querySelectorAll('.bottom-bar button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    }
+
+    /* WEbGL ENGINE RENDER LOOP */
+    function renderLoop() {
+      requestAnimationFrame(renderLoop);
+      if (!prgSim || !prgRender || video.readyState < 2) return;
+
+      // 1. 更新视频纹理
+      gl.bindTexture(gl.TEXTURE_2D, videoTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+
+      // 计算 AspectRatio 保留在物理方程中使用 (x / min(x,y))
+      const mSize = Math.min(canvas.width, canvas.height);
+      const aspectX = canvas.width / mSize;
+      const aspectY = canvas.height / mSize;
+
+      // 2. PingPong 模拟步进 --------
+      gl.useProgram(prgSim);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fboB.fbo);
+      gl.viewport(0, 0, simWidth, simHeight);
+      
+      const posLocSim = gl.getAttribLocation(prgSim, 'a_position');
+      gl.enableVertexAttribArray(posLocSim);
+      gl.vertexAttribPointer(posLocSim, 2, gl.FLOAT, false, 0, 0);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, fboA.tex);
+      gl.uniform1i(gl.getUniformLocation(prgSim, 'u_heightMap'), 0);
+      gl.uniform2f(gl.getUniformLocation(prgSim, 'u_texel'), 1.0 / simWidth, 1.0 / simHeight);
+      gl.uniform4fv(gl.getUniformLocation(prgSim, 'u_fingers'), fingerPos);
+      gl.uniform1fv(gl.getUniformLocation(prgSim, 'u_active'), fingerActive);
+      gl.uniform2f(gl.getUniformLocation(prgSim, 'u_aspect'), aspectX, aspectY);
+      gl.uniform1f(gl.getUniformLocation(prgSim, 'u_mode'), effectMode);
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      // 交换 FBO 让新计算的波浪变为下一次迭代的主体数据
+      let temp = fboA; fboA = fboB; fboB = temp;
+
+      // 3. 全局复合与输出渲染 --------
+      gl.useProgram(prgRender);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+
+      const posLocRen = gl.getAttribLocation(prgRender, 'a_position');
+      gl.enableVertexAttribArray(posLocRen);
+      gl.vertexAttribPointer(posLocRen, 2, gl.FLOAT, false, 0, 0);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, fboA.tex);
+      gl.uniform1i(gl.getUniformLocation(prgRender, 'u_heightMap'), 0);
+
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, videoTex);
+      gl.uniform1i(gl.getUniformLocation(prgRender, 'u_video'), 1);
+
+      gl.uniform2f(gl.getUniformLocation(prgRender, 'u_texel'), 1.0 / simWidth, 1.0 / simHeight);
+      gl.uniform1f(gl.getUniformLocation(prgRender, 'u_mode'), effectMode);
+      gl.uniform1f(gl.getUniformLocation(prgRender, 'u_isFront'), isFrontCam ? 1.0 : 0.0);
+      gl.uniform2f(gl.getUniformLocation(prgRender, 'u_videoRatio'), 1.0, 1.0); // Keep bound scaling neutral here as canvas handles CSS containment
+      
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    
+    // START
+    window.addEventListener('click', () => { if(!stream) initCamera(); });
+    initCamera();
+    renderLoop();
+
+  </script>
+</body>
+</html>
+
