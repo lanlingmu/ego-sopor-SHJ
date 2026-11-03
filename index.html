@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SHJ的妙妙屋</title>
   <meta name="description" content="SHJ 的互动实验收藏：3D 沙纹、每日塔罗、粒子古塔与液态涟漪。挑一个小世界，进去玩一会儿。">
-  <meta name="theme-color" content="#101415">
+  <meta name="theme-color" content="#170b0e">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="assets/home.css">
-  <script src="assets/home.js" defer></script>
+  <script type="module" src="assets/home.js"></script>
 </head>
 <body>
   <a class="skip" href="#mmw">跳到网站列表</a>
@@ -20,16 +20,16 @@
     <main>
       <section class="hero" aria-labelledby="heading">
         <div class="hero-text"><p class="eyebrow"><span></span>SHJ的妙妙屋</p><h1 id="heading">SHJ的<br><span>妙妙屋</span><i aria-hidden="true">✳</i></h1><p class="intro">一些想法，一点好奇。<br>把光、粒子和偶然，做成可以走进去的小世界。</p><a class="explore" href="#mmw">挑一个，进去玩 <span aria-hidden="true">↓</span></a></div>
-        <div class="hero-art" aria-hidden="true"><canvas id="field"></canvas><span class="art-note">让好奇心游荡一会儿。</span><span class="art-caption">光 · 形状 · 互动</span></div>
+        <div class="hero-art"><canvas id="field" tabindex="0" role="img" aria-label="可旋转的红色线条雕塑。移动鼠标可改变视角，按住拖动可旋转，也可使用键盘方向键。" aria-describedby="field-hint"></canvas><span class="art-note" aria-hidden="true">让好奇心游荡一会儿。</span><div class="field-footer"><span class="art-caption" id="field-hint">移动鼠标 · 按住拖动</span><div class="field-actions"><button type="button" data-field-pause aria-pressed="false" aria-controls="field">暂停转动</button><button type="button" data-field-reset aria-controls="field">重置视角</button></div></div></div>
       </section>
       <section class="worlds" id="mmw" aria-labelledby="worlds-heading">
         <div class="section-heading"><div><p class="eyebrow">一些正在发生的实验</p><h2 id="worlds-heading">从这里，进入另一个世界。</h2></div><span class="count">4 个小网站</span></div>
-        <div class="filters" role="group" aria-label="按互动方式筛选"><button class="active" data-filter="all" aria-pressed="true">全部作品 <span>4</span></button><button data-filter="mouse" aria-pressed="false">鼠标互动 <span>1</span></button><button data-filter="camera" aria-pressed="false">摄像头 / 手势 <span>3</span></button></div>
+        <div class="gallery-toolbar"><div class="filters" role="group" aria-label="按互动方式筛选"><button class="active" data-filter="all" aria-pressed="true">全部作品 <span>4</span></button><button data-filter="mouse" aria-pressed="false">鼠标互动 <span>1</span></button><button data-filter="camera" aria-pressed="false">摄像头 / 手势 <span>3</span></button></div></div>
         <div class="grid">
-          <a class="project" href="3d_sanddraw/" data-type="mouse"><div class="project-art"><img src="assets/sand.svg" alt="青绿色波线交织成起伏的沙纹图形示意" width="900" height="600"><span class="medium">鼠标互动</span><span class="enter" aria-hidden="true">↗</span></div><div class="project-info"><div><span class="english">Sand & resonance</span><h3>3D 沙纹</h3></div><span class="project-number" aria-hidden="true">01</span></div><p>拖动视角，调节光影。看见声音般的起伏，长成自己的形状。</p></a>
-          <a class="project" href="Daily-Luck/" data-type="camera"><div class="project-art"><img src="assets/tarot.svg" alt="星点中悬浮着三张金边塔罗牌的图形示意" width="900" height="600" loading="lazy"><span class="medium">摄像头 / 手势</span><span class="enter" aria-hidden="true">↗</span></div><div class="project-info"><div><span class="english">A little serendipity</span><h3>每日塔罗</h3></div><span class="project-number" aria-hidden="true">02</span></div><p>在光点和卡牌之间，给今天留一点偶然。放轻松，当作一场小游戏。</p></a>
-          <a class="project" href="particle-pagoda/" data-type="camera"><div class="project-art"><img src="assets/pagoda.svg" alt="暖色光点勾勒出层层古塔的图形示意" width="900" height="600" loading="lazy"><span class="medium">摄像头 / 手势</span><span class="enter" aria-hidden="true">↗</span></div><div class="project-info"><div><span class="english">Architecture in particles</span><h3>粒子古塔</h3></div><span class="project-number" aria-hidden="true">03</span></div><p>古老的轮廓，轻盈的粒子。伸出双手，与一座数字古塔相遇。</p></a>
-          <a class="project" href="ripples/" data-type="camera"><div class="project-art"><img src="assets/ripples.svg" alt="蓝绿色水面上的层层涟漪图形示意" width="900" height="600" loading="lazy"><span class="medium">摄像头 / 手势</span><span class="enter" aria-hidden="true">↗</span></div><div class="project-info"><div><span class="english">A world made liquid</span><h3>液态涟漪</h3></div><span class="project-number" aria-hidden="true">04</span></div><p>让镜头里的世界缓缓融化。在液体与晶体之间，发现另一种日常。</p></a>
+          <a class="project" href="3d_sanddraw/" data-type="mouse"><div class="project-visual"><div class="project-art"><img src="assets/sand.svg" alt="青绿色波线交织成起伏的沙纹图形示意" width="900" height="600"><span class="medium">鼠标互动</span><span class="enter" aria-hidden="true">↗</span></div></div><div class="project-info"><div><span class="english">Sand & resonance</span><h3>3D 沙纹</h3></div><span class="project-number" aria-hidden="true">01</span></div><p>拖动视角，调节光影。看见声音般的起伏，长成自己的形状。</p></a>
+          <a class="project" href="Daily-Luck/" data-type="camera"><div class="project-visual"><div class="project-art"><img src="assets/tarot.svg" alt="星点中悬浮着三张金边塔罗牌的图形示意" width="900" height="600" loading="lazy"><span class="medium">摄像头 / 手势</span><span class="enter" aria-hidden="true">↗</span></div></div><div class="project-info"><div><span class="english">A little serendipity</span><h3>每日塔罗</h3></div><span class="project-number" aria-hidden="true">02</span></div><p>在光点和卡牌之间，给今天留一点偶然。放轻松，当作一场小游戏。</p></a>
+          <a class="project" href="particle-pagoda/" data-type="camera"><div class="project-visual"><div class="project-art"><img src="assets/pagoda.svg" alt="暖色光点勾勒出层层古塔的图形示意" width="900" height="600" loading="lazy"><span class="medium">摄像头 / 手势</span><span class="enter" aria-hidden="true">↗</span></div></div><div class="project-info"><div><span class="english">Architecture in particles</span><h3>粒子古塔</h3></div><span class="project-number" aria-hidden="true">03</span></div><p>古老的轮廓，轻盈的粒子。伸出双手，与一座数字古塔相遇。</p></a>
+          <a class="project" href="ripples/" data-type="camera"><div class="project-visual"><div class="project-art"><img src="assets/ripples.svg" alt="蓝绿色水面上的层层涟漪图形示意" width="900" height="600" loading="lazy"><span class="medium">摄像头 / 手势</span><span class="enter" aria-hidden="true">↗</span></div></div><div class="project-info"><div><span class="english">A world made liquid</span><h3>液态涟漪</h3></div><span class="project-number" aria-hidden="true">04</span></div><p>让镜头里的世界缓缓融化。在液体与晶体之间，发现另一种日常。</p></a>
         </div><p class="results sr-only" role="status" aria-live="polite">显示全部 4 个网站</p>
         <p class="preview-note">封面为图形示意，实际互动效果请进入网站体验。</p>
       </section>
