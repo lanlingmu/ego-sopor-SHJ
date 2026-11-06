@@ -12,17 +12,17 @@
 | `particle-pagoda/` | SHJ的妙妙屋-粒子古塔 | 摄像头、手势 |
 | `ripples/` | SHJ的妙妙屋-液态涟漪 | 摄像头、手势 |
 
-来源：https://github.com/lanlingmu27-ops 。每个旧站的来源提交记录在 `migration.json`。`waangzhanceshi` 未下载、未迁移、未修改。原有四个仓库也未删除或更改。
+来源：https://github.com/lanlingmu 。每个旧站的来源提交记录在 `migration.json`。`waangzhanceshi` 未下载、未迁移、未修改。原有四个仓库也未删除或更改。
 
 本次为源码快照整合，不合并各仓库的完整 Git 提交历史；来源提交可追溯。子站保留原有互动代码，仅改页面标题、补充元数据和返回总站的链接。首页封面为原创矢量图形示意，并非运行截图。
 
 ## 在 GitHub 发布
 
-1. 使用已新建的公开仓库 `lanlingmu27-ops/ego-sopor-SHJ`。
+1. 使用已新建的公开仓库 `lanlingmu/ego-sopor-SHJ`。
 2. 整合源码位于仓库根目录的 `main` 分支，含 `.github` 和 `.nojekyll`。
 3. 打开仓库 **Settings → Pages → Build and deployment → Source**，选择 **GitHub Actions**。
 4. 在 **Actions** 中运行 `Deploy SHJ sites to GitHub Pages`，或再推送一次更改触发部署。
-5. 工作流成功后，预期访问地址为 `https://lanlingmu27-ops.github.io/ego-sopor-SHJ/`。
+5. 工作流成功后，预期访问地址为 `https://lanlingmu.github.io/ego-sopor-SHJ/`。
 
 部署状态以 Actions 的实际结果为准。原站链接会继续使用原仓库，不自动跳转到新地址。
 
